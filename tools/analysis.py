@@ -321,8 +321,8 @@ class Job(object):
                 jf.write("#PBS -l mem={}\n".format(mem))
                 jf.write("#PBS -l ncpus={}\n".format(ncpus))
                 jf.write("#PBS -l walltime={}\n".format(walltime))
-            jf.write("#PBS -o {}.o\n".format(os.path.join(os.path.expanduser(self.analysis.scratch),self.oe_fn)))
-            jf.write("#PBS -e {}.e\n".format(os.path.join(os.path.expanduser(self.analysis.scratch),self.oe_fn)))
+            jf.write("#PBS -o {}.o\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+            jf.write("#PBS -e {}.e\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
 
             #load modules:
             for module in modules:
@@ -351,7 +351,7 @@ class Job(object):
                     pbs_id = depend.pbs_id.strip()     
                 depend_str = depend_str + (':' if len(depend_str)>0 else '') + pbs_id 
             command = 'qsub -W depend=afterok:{0} {1}'.format(depend_str,os.path.expanduser(self.file_name))
-            p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            P = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         else:
             command = 'qsub {0}'.format(os.path.expanduser(self.file_name))
             p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
@@ -447,8 +447,8 @@ class StageJob(Job):
             jf.write("#PBS -N {0}\n".format(name))
             jf.write("#PBS -q staging\n")
             jf.write("#PBS -P vervetmonkey\n")
-            jf.write("#PBS -o {0}.o\n".format(os.path.join(os.path.expanduser(self.analysis.scratch),self.oe_fn)))
-            jf.write("#PBS -e {0}.e\n".format(os.path.join(os.path.expanduser(self.analysis.scratch),self.oe_fn)))
+            jf.write("#PBS -o {0}.o\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+            jf.write("#PBS -e {0}.e\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
             jf.write("#PBS -l mem={0}\n".format(mem))
             jf.write("#PBS -l ncpus={0}\n".format(ncpus))
             jf.write("#PBS -l walltime={0}\n".format(walltime))

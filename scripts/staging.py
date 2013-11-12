@@ -1,6 +1,15 @@
 #!/usr/bin/env python
 import os, filecmp, subprocess
 
+def stage(destination=):
+    """
+    usecases:
+    stage all files in directory
+    
+    """
+
+
+
 def sync_analysis():
     
     unison -batch ~/vervet_data/analysis ~/vervet_data_project/analysis
