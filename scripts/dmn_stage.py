@@ -3,7 +3,7 @@ import socket, warnings, os, datetime, textwrap, subprocess
 import numpy as np
 
 #min total files size in bytes to use qsub for staging 
-min_qsub_stage = 0
+min_qsub_stage = 0#500000000
 
 def stage(file_ls,source_base,target_base,mode,verbose=False):
     # this function should only run on dmn,
@@ -80,9 +80,9 @@ def write_jobscript(file_ls,source_base,destination_base,mode,job_fn=None,out_fn
     options = 'rp'    
     time = datetime.datetime.now().strftime("%Y%m%d-%H.%M%S")
     if job_fn is None:
-        job_fn = "~/vervet_project/staging/jobscript/stage_{}.sh".format(time)
+        job_fn = os.path.expanduser("~/vervet_project/staging/jobscript/stage_{}.sh".format(time))
     if out_fn is None:
-        out_fn = "~/vervet_scratch/staging/log/stage_{}".format(time)
+        out_fn = os.path.expanduser("~/vervet_project/staging/log/stage_{}".format(time))
 
     modes = ['non-exist','newer','force']
     if mode not in modes:
@@ -105,11 +105,11 @@ def write_jobscript(file_ls,source_base,destination_base,mode,job_fn=None,out_fn
     #PBS -l select=2:ncpus=2:mpiprocs=4 -l place=scatter
     #PBS -l walltime=02:00:00
     module load mutil
+    cd {source_base}
+    mpirun mcp -{options} --parents --print-stats --direct-read --direct-write --threads=1 --double-buffer --mpi {source} {destination_base}/
+    """.format(out_fn=out_fn,source_base=source_base,options=options,source=' '.join([f for f in file_ls]),destination_base=destination_base))
     
-    mpirun mcp -{options} --print-stats --direct-read --direct-write --threads=1 --double-buffer --mpi {source} {destination_base}/
-    """.format(out_fn=out_fn,options=options,source=' '.join([os.path.join(source_base,f) for f in file_ls]),destination_base=destination_base))
-    
-    with open(os.path.expanduser(job_fn),'w') as f:
+    with open(job_fn,'w') as f:
         f.write(stage_script)
     p = subprocess.call(['chmod','ug+x',os.path.expanduser(job_fn)])
     return job_fn

@@ -119,9 +119,23 @@ if __name__ == '__main__':
     else:
         partner = args.partner 
     
-    print os.path.dirname(os.path.realpath(__file__))
-    print os.getcwd()    
-
-    #local_prepare_staging(args.path_or_filename,partner,args.direction,args.mode)
+    
+    possible_base_dirs = ['/projects/vervetmonkey/','/lustre/scratch/projects/vervetmonkey/','/net/gmi.oeaw.ac.at/nordborg/lab/Projects/vervetpopgen/']
+    
+    #get filenames relative to project dir
+    rel_fnames=[]
+    for file in args.path_or_filename:
+        real_path = os.path.realpath(file)
+        for bd in possible_base_dirs:
+            if real_path.startswith(bd):
+                    rel_fnames.append(real_path[len(bd):])
+                    break
+    if len(rel_fnames) != len(args.path_or_filename):
+        raise Exception('File number not constistent after preparation. before: {0}, after: {1}'.format(args.path_or_filename,rel_fnames))
+    
+    print rel_fnames
+    
+    
+    local_prepare_staging(rel_fnames,partner,args.direction,args.mode)
 
 
