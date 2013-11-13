@@ -133,7 +133,6 @@ if __name__ == '__main__':
     if len(rel_fnames) != len(args.path_or_filename):
         raise Exception('File number not constistent after preparation. before: {0}, after: {1}'.format(args.path_or_filename,rel_fnames))
     
-    print rel_fnames
     
     
     local_prepare_staging(rel_fnames,partner,args.direction,args.mode)
