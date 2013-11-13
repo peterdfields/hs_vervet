@@ -46,6 +46,10 @@ def stage(file_ls,source_base,target_base,mode,verbose=False):
                 add_if_newer(file,newer_on_source)
         file_ls = newer_on_source
     
+    if not file_ls:
+        print "Nothing to stage in mode {0}".format(mode)
+        return
+
     sizes = []
     for file in file_ls:
         sizes.append(os.path.getsize(os.path.join(source_base,file)))
@@ -57,13 +61,17 @@ def stage(file_ls,source_base,target_base,mode,verbose=False):
     median = np.median(sizes)
     
     #implement a check for many small files (using number and median) and zip if necessary
+    job_fn = write_jobscript(file_ls,source_base,target_base,mode)
+
+    
 
     if total > min_qsub_stage:
-        staging_qsub(file_ls,source_base,target_base,mode)
+        p = subprocess.Popen("qsub {0}".format(job_fn),shell=True)
     else:
-        staging_direct(file_ls,source_base,target_base,mode)
+        p = subprocess.Popen("{0}".format(job_fn),shell=True)
 
-def staging_qsub(file_ls,source_base,destination_base,mode,job_fn=None,out_fn=None):
+
+def write_jobscript(file_ls,source_base,destination_base,mode,job_fn=None,out_fn=None):
     """
     options (mcp options):
     p ... preserve timestamp
@@ -74,7 +82,7 @@ def staging_qsub(file_ls,source_base,destination_base,mode,job_fn=None,out_fn=No
     if job_fn is None:
         job_fn = "~/vervet_project/staging/jobscript/stage_{}.sh".format(time)
     if out_fn is None:
-        out_fn = "~/vervet_project/staging/log/stage_{}".format(time)
+        out_fn = "~/vervet_scratch/staging/log/stage_{}".format(time)
 
     modes = ['non-exist','newer','force']
     if mode not in modes:
@@ -103,7 +111,9 @@ def staging_qsub(file_ls,source_base,destination_base,mode,job_fn=None,out_fn=No
     
     with open(os.path.expanduser(job_fn),'w') as f:
         f.write(stage_script)
-    p = subprocess.Popen("qsub {}".format(job_fn),shell=True)
+    p = subprocess.call(['chmod','ug+x',os.path.expanduser(job_fn)])
+    return job_fn
+
     
 
     

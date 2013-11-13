@@ -77,6 +77,10 @@ def local_prepare_staging(file_ls,partner,direction,mode,project='vervet'):
         nonexist_file_ls = [file for file in file_ls if not os.path.exists(os.path.join(os.path.expanduser(destination_base),file))]
         file_ls = nonexist_file_ls
     
+    if not file_ls:
+        print "Nothing to stage in mode {0}".format(mode)
+        return
+    
     
     command = "dmn_stage.py -m {mode} {source_base} {target_base} {files}".format(mode=mode,source_base=source_base,target_base=destination_base,files=' '.join(file_ls))
     if 'dmn' in host:
@@ -114,6 +118,10 @@ if __name__ == '__main__':
             raise Exception('"auto" staging partner determination only implemented for lws12 or mendel')
     else:
         partner = args.partner 
-    local_prepare_staging(args.path_or_filename,partner,args.direction,args.mode)
+    
+    print os.path.dirname(os.path.realpath(__file__))
+    print os.getcwd()    
+
+    #local_prepare_staging(args.path_or_filename,partner,args.direction,args.mode)
 
 
