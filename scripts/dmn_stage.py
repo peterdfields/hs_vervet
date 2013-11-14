@@ -1,13 +1,16 @@
 #!/usr/bin/env python
-import socket, warnings, os, datetime, textwrap, subprocess
+from __future__ import print_function
+import socket, warnings, os, datetime, textwrap, subprocess, sys
 import numpy as np
 
 #min total files size in bytes to use qsub for staging 
 min_qsub_stage = 0#500000000
 
-def stage(file_ls,source_base,target_base,mode,verbose=False):
+def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_fn=None,verbose=False):
     # this function should only run on dmn,
     # where all file systems are seen
+
+    verboseprint = print if verbose else lambda *a, **k: Non
 
     host = socket.gethostname()
     if 'dmn' not in host:
@@ -47,8 +50,9 @@ def stage(file_ls,source_base,target_base,mode,verbose=False):
         file_ls = newer_on_source
     
     if not file_ls:
-        print "Nothing to stage in mode {0}".format(mode)
+        verboseprint("Nothing to stage in mode {0}".format(mode))
         return
+        
 
     sizes = []
     for file in file_ls:
@@ -61,15 +65,21 @@ def stage(file_ls,source_base,target_base,mode,verbose=False):
     median = np.median(sizes)
     
     #implement a check for many small files (using number and median) and zip if necessary
-    job_fn = write_jobscript(file_ls,source_base,target_base,mode)
-
+    job_fn = write_jobscript(file_ls,source_base,target_base,mode,job_fn,out_fn)
     
 
-    if total > min_qsub_stage:
-        p = subprocess.Popen("qsub {0}".format(job_fn),shell=True)
+    if run_type == 'submit' or (run_type == 'auto' and total > min_qsub_stage):
+        p = subprocess.Popen("qsub {0}".format(job_fn),shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        out, err = p.communicate()
+        print(out)
     else:
-        p = subprocess.Popen("{0}".format(job_fn),shell=True)
+        p = subprocess.Popen("{0}".format(job_fn),shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        rc = p.returncode
+        print(rc)
+    
+    print(out)
 
+    return out, err, rc
 
 def write_jobscript(file_ls,source_base,destination_base,mode,job_fn=None,out_fn=None):
     """
@@ -120,7 +130,6 @@ def write_jobscript(file_ls,source_base,destination_base,mode,job_fn=None,out_fn
     
 
 if __name__ == '__main__':
-    import sys
     sys.path.insert(0, os.path.expanduser('~/lib/python'))
     sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
     import argparse
@@ -129,9 +138,15 @@ if __name__ == '__main__':
     parser.add_argument("source_base",help="base directiory of source on dmn")
     parser.add_argument("target_base",help="base directiory of target on dmn")
     parser.add_argument("-m","--mode",choices=['non-exist','newer','force'],default='newer',help="Staging mode. Which files should be staged (only non existing, only newer or all.)")
+    parser.add_argument("-t","--run-type",choices=['direct','submit','auto'],default='auto',help='Decides wheter staging should be run on data mover node directly or through qsub. Default (auto) make choice depending on file size and number.')
+    parser.add_argument("-j","--job-fname",default=None,help="Full filename of jobfile. By default it is put in ~/vervet_project/staging/...")
+    parser.add_argument("-o","--stdout-fname",default=None,help="Full filename of out/err filenames. By default it is put in ~/vervet_project/staging/...")
+    parser.add_argument("-d","--dry-run",action="store_true")
+    parser.add_argument("-v","--verbose",action="store_true")
+
     parser.add_argument("path_or_filename",help="Path or filename to stage.", nargs="+")
     
     args = parser.parse_args()
 
-    stage(args.path_or_filename,args.source_base,args.target_base,args.mode)
+    stage(args.path_or_filename,args.source_base,args.target_base,args.mode,run_type=args.run_type,job_fn=args.job_fname,out_fn=args.stdout_fname)
 

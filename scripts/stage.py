@@ -1,0 +1,126 @@
+#!/usr/bin/env python
+"""
+input: non-flag arguments should be single or multiple files
+include option to read filenames from file
+"""
+from __future__ import print_function
+import os, sys, socket, subprocess
+
+
+
+def local_prepare_staging(file_ls,partner,direction,mode,run_type='auto',job_fn=None,out_fn=None,verbose=False,project='vervet'):
+    """
+    this is run locally and establishes ssh connection to dmn 
+    where staging proceeds
+    """
+        
+    verboseprint = print if verbose else lambda *a, **k: None
+
+    # sanity check for input 
+    partners = ['lab','scratch']
+    if partner not in partners:
+        raise ValueError('staging partner (source/destination other than /project) must be in {}'.format(stage_partners))
+    host = socket.gethostname()
+
+    directions = ['in','out']
+    if direction not in directions:
+        raise ValueError('direction must be in {}'.format(directions))
+
+    modes = ['non-exist','newer','force']
+    if mode not in modes:
+        raise ValueError('stage_mode must be in {}'.format(modes))
+    
+    project_base = os.path.join("~/",project + '_project')
+    scratch_base = os.path.join("~/",project + '_'  +partner)    
+
+    if direction == 'in':
+        source_base = project_base
+        destination_base = scratch_base
+    elif direction == 'out':
+        source_base = scratch_base
+        destination_base = project_base
+        
+    if partner == 'scratch' and 'login' not in host and 'dmn' not in host:
+        raise Exception('staging to scratch only implemented when running on mendel. Your host name is {}'.format(host)) 
+
+    if mode == "non-exist":
+        #check wether files exist locally
+        nonexist_file_ls = [file for file in file_ls if not os.path.exists(os.path.join(os.path.expanduser(destination_base),file))]
+        file_ls = nonexist_file_ls
+    
+    if not file_ls:
+        verboseprint("Nothing to stage in mode {0}".format(mode))
+        return
+    
+    
+    command = "dmn_stage.py -m {mode} -t {run_type}  {source_base} {target_base} {files}".format(mode=mode,run_type=run_type,source_base=source_base,target_base=destination_base,files=' '.join(file_ls))
+
+    if job_fn is not None:
+        command += "-j " + job_fn
+
+    if out_fn is not None:
+        command += "-o " + out_fn
+
+    if 'dmn' in host:
+        p = subprocess.Popen(command, shell=True)
+    else:
+        p = subprocess.Popen("ssh dmn.mendel.gmi.oeaw.ac.at nohup {0}".format(command), shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    out, err = p.communicate()
+    rc = p.returncode        
+    
+    return out, err, rc            
+       
+
+
+
+
+if __name__ == '__main__':
+    sys.path.insert(0, os.path.expanduser('~/lib/python'))
+    sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
+    import argparse
+
+    parser=argparse.ArgumentParser(description="Stage from /project on mendel\
+                                                 to lsw12 or scratch")
+    parser.add_argument("path_or_filename",help="Path or filename to stage.", nargs="+")
+    parser.add_argument("-p","--partner",choices=['scratch','lab','auto'],default='auto',help="staging partner (source/destination other than /project)")
+    parser.add_argument('-d',"--direction",default="in",choices=['in','out'],help="direction of staging (from or to project folder)")
+    parser.add_argument("-m","--mode",choices=['non-exist','newer','force'],default='newer',help="Staging mode. Which files should be staged (only non existing, only newer or all.)")
+    parser.add_argument("-t","--run-type",choices=['direct','submit','auto'],default='auto',help='Decides wheter staging should be run on data mover node directly or through qsub. Default (auto) make choice depending on file size and number.')
+    parser.add_argument("-j","--job-fname",default=None,help="Full filename of jobfile. By default it is put in ~/vervet_project/staging/...")
+    parser.add_argument("-o","--stdout-fname",default=None,help="Full filename of out/err filenames. By default it is put in ~/vervet_project/staging/...")
+    parser.add_argument("--dry-run",action="store_true")
+
+    parser.add_argument("-v","--verbose",action="store_true")
+    args =  parser.parse_args()
+
+
+    if args.partner == 'auto':
+        host = socket.gethostname()
+        if host == 'gmi-lws12':
+            partner = 'lab'
+        elif 'login' in host or dmn in host:
+            partner = 'scratch'
+        else:
+            raise Exception('"auto" staging partner determination only implemented for lws12 or mendel')
+    else:
+        partner = args.partner 
+    
+    
+    possible_base_dirs = ['/projects/vervetmonkey/','/lustre/scratch/projects/vervetmonkey/','/net/gmi.oeaw.ac.at/nordborg/lab/Projects/vervetpopgen/']
+    
+    #get filenames relative to project dir
+    rel_fnames=[]
+    for file in args.path_or_filename:
+        real_path = os.path.realpath(file)
+        for bd in possible_base_dirs:
+            if real_path.startswith(bd):
+                    rel_fnames.append(real_path[len(bd):])
+                    break
+    if len(rel_fnames) != len(args.path_or_filename):
+        raise Exception('File number not constistent after preparation. before: {0}, after: {1}'.format(args.path_or_filename,rel_fnames))
+    
+    
+    
+    local_prepare_staging(rel_fnames,partner,args.direction,args.mode,run_type=args.run_type,job_fn=args.job_fname,out_fn=args.stdout_fname)
+
+

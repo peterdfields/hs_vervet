@@ -18,13 +18,6 @@ class Analysis(object):
             hvb.try_make_dirs(os.path.join(self.project,self.ana_dir,direc))
         self.steps=[]
 
-    #def ana_dir(self,loc):
-    #    if loc == 'scratch':
-    #        return os.path.join(self.scratch_dir,'analyses/',self.name)
-    #    elif loc == 'project':
-    #        return os.path.join(self.project_dir,'analyses/',self.name)
-    #    else:
-    #        raise Exception('location must be "scratch" or "project" but is {}'.format(loc))
         
 
     def append_step(self, step):
@@ -45,7 +38,6 @@ class Analysis(object):
 class AnalysisStep(object):
 
     def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, depend_steps = None, stagein=True, stageout=True, default_run='qsub',  check_date_input = True, verbose = False):
-        #add options stagein=True and stageout=True that triger automatic staging
         # the next to lines are just for the following methods to work
         # the attributes will be set again by their constructors
         self.name = name
@@ -147,6 +139,8 @@ class AnalysisStep(object):
             self.stageout_job.run_jobscript()
 
     def qsub(self):
+        #hold makes sure that the depend jobs are seen by the dependent jobs
+        
         if self.stagein_job is not None:
             self.stagein_job.write_jobscript()
             self.stagein_job.qsub_jobscript()
@@ -200,70 +194,6 @@ class AnalysisStep(object):
         self.stageout_job = stageout_job       
         
 
-"""
-    def write_stage_in_file(self):
-        with open(self.in_fname) as f:
-            for fn in self.input_files:
-                f.write(fn+'\n')
-
-    def write_stage_out_file(self):
-        with open(self.out_fname) as f:
-            for fn in self.output_files:
-                f.write(fn+'\n')
-    
-    def write_stage_script(self,mode='direct'):
-        pass
-
-    def stage_in(self):
-        # check total filesize for things to stage in
-        # limit for considering a file as small in (bytes):
-        #small_limit = 2*2**20
-        # starting form how many small files should we start zipping (not implemented yet)
-        #max_small = 500
-        host = socket.gethostname()
-        if host == 'gmi-lws12':
-            target_basedir = self.analysis.base_dir+'_lab'
-        elif 'login' in host or 'dmn' in host:
-            target_basedir = self.analysis.base_dir + '_scratch'  
-        else:
-            raise Exception('host must be a login node, dnm or gmi-lws12, but it is {}'.format(host))
-        source_basedir = self.analysis.base_dir        
-        
-        self.write_stage_in_file()
-        
-        analysis_sync
-        
-        check_size(in_fname)
-        
-        if 'dmn' not in host:
-            ssh dmn run stagin.py self.in_fname
-        else:
-            run stagin.py self.in_fname
-                
-
-        size = 0
-        for file in files:
-            fn_target = os.path.join(target_basedir, file)
-            fn_project = os.path.join(os.path.expanduser(~/vervet_data_project), file)
-            if os.path.exits(fn_target):
-                if filecmp.cmp(fn_target,fn_project):
-                    pass
-                else:
-                    size += os.path.getsize(fn_project)
-            else:
-                size += os.path.getsize(fn_project)
-"""
-
-"""
-    if size>10^9:
-        qsub_staging
-    else:
-        local stagingtage_in_direct(self):
-        if socket.gethostname()=='gmi-lws12':
-            pass
-        else:
-            pass
-"""
  
 class Job(object):
     def __init__(self,commands=None, modules=None, analysis_step=None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='08:00:00',ncpus=1, mem=None, debug=False):
