@@ -4,6 +4,7 @@ import sys, os, datetime, subprocess, socket, filecmp
 sys.path.insert(0, os.path.expanduser('~/lib/python'))
 sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
 from hs_vervet.tools import hs_vervet_basics as hvb
+from hs_vervet.tools.stage import local_prepare_staging
 
 
 class Analysis(object):
@@ -121,35 +122,31 @@ class AnalysisStep(object):
                 
     def write_jobscripts(self):    
         if self.stagein_job is not None:
-            self.stagein_job.write_jobscript()
+            self.stagein_job.stage(dry_run=True)
         for job in self.jobs:
             job.write_jobscript()
         if self.stageout_job is not None:
-            self.stageout_job.write_jobscript()
+            self.stageout_job.stage(dry_run=True)
 
     def local_run(self):
         if self.stagein_job is not None:
-            self.stagein_job.write_jobscript()
-            self.stagein_job.run_jobscript()
+            self.stagein_job.stage(run_type='direct')
         for job in self.jobs:
             job.write_jobscript()
             job.run_jobscript()
         if self.stageout_job is not None:
-            self.stageout_job.write_jobscript()
-            self.stageout_job.run_jobscript()
+            self.stageout_job.stage(run_type='direct')
 
     def qsub(self):
         #hold makes sure that the depend jobs are seen by the dependent jobs
         
         if self.stagein_job is not None:
-            self.stagein_job.write_jobscript()
-            self.stagein_job.qsub_jobscript()
+            self.stagein_job.stage(run_type='submit')
         for job in self.jobs:
             job.write_jobscript()
             job.qsub_jobscript()
         if self.stageout_job is not None:
-            self.stageout_job.write_jobscript()
-            self.stageout_job.qsub_jobscript()    
+            self.stagein_job.stage(run_type='submit')
     
     def print_summary(self,job_summary=True):
         print "="*60
@@ -281,7 +278,7 @@ class Job(object):
                     pbs_id = depend.pbs_id.strip()     
                 depend_str = depend_str + (':' if len(depend_str)>0 else '') + pbs_id 
             command = 'qsub -W depend=afterok:{0} {1}'.format(depend_str,os.path.expanduser(self.file_name))
-            P = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         else:
             command = 'qsub {0}'.format(os.path.expanduser(self.file_name))
             p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
@@ -316,7 +313,7 @@ class Job(object):
         
 
 class StageJob(Job):
-    def __init__(self,  direction, files=None, analysis_step=None, stage_analysis_dir=True, depends=None,  verbose=False, debug=False):
+    def __init__(self,  direction, files=None, analysis_step=None, stage_analysis_dir=True, mode='newer',depends=None,  verbose=False, debug=False):
         if direction not in ['in','out']:
             raise ValueError('direction should be "in" or "out" but is {}'.format(direction))
         self.direction = direction
@@ -324,6 +321,7 @@ class StageJob(Job):
         self.depends = ([] if depends is None else depends)
         self.debug = debug
         self.stage_analysis_dir = stage_analysis_dir
+        self.mode = mode
         if analysis_step is not None:
             self.bind_to_analysis_step(analysis_step)
         else:
@@ -347,6 +345,24 @@ class StageJob(Job):
         self.scratch = ('~/vervet_lab' if hid == 'lws12' else '~/vervet_scratch')
         if self.stage_analysis_dir:
             self.files.insert(0,'analyses/'+analysis_step.analysis.name+'/')
+
+    
+    def stage(self,run_type='auto',dry_run=False):
+        # todo: incorporate depends!
+        if self.analysis.host == 'lws12':
+            partner = 'lab'
+        else:
+            partner = 'scratch'
+        id = self.id
+        sn = self.analysis_step.short_name
+        name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
+        (out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),dry_run=dry_run,job_name=name,verbose=False)
+        #print out, err, rc
+        self.returncode = rc
+        if run_type == 'submit':
+            self.pbs_id = out.strip()
+    
+
 
 
     def write_stage_fn_file(self):

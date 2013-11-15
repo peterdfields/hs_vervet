@@ -8,13 +8,22 @@ import os, sys, socket, subprocess
 
 
 
-def local_prepare_staging(file_ls,partner,direction,mode,run_type='auto',job_fn=None,out_fn=None,verbose=False,project='vervet'):
+def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='auto',job_fn=None,out_fn=None,job_name=None,dry_run=False,verbose=False,project='vervet'):
     """
-    this is run locally and establishes ssh connection to dmn 
+    this is run anywhere (lws12, mendel login or dmn) and establishes ssh connection to dmn 
     where staging proceeds
+    file_ls_or_fnfname is either a list of files to stage or the path to a file that contains the filenames to stage
     """
         
     verboseprint = print if verbose else lambda *a, **k: None
+
+    if type(file_ls_or_fnfname) is str:
+        with open(file_ls_or_fnfname,'r') as f:
+            file_ls = [s.strip() for s in f.readlines()]
+    elif type(file_ls_or_fnfname) is list:
+        file_ls = file_ls_or_fnfname
+    else:
+        raise TypeError('First argument should be list of filenames or path to a file that contains filenames. But it is {0}:{1}'.format(type(file_ls_or_fnfname),file_ls_or_fnfname))
 
     # sanity check for input 
     partners = ['lab','scratch']
@@ -56,10 +65,17 @@ def local_prepare_staging(file_ls,partner,direction,mode,run_type='auto',job_fn=
     command = "dmn_stage.py -m {mode} -t {run_type}  {source_base} {target_base} {files}".format(mode=mode,run_type=run_type,source_base=source_base,target_base=destination_base,files=' '.join(file_ls))
 
     if job_fn is not None:
-        command += "-j " + job_fn
+        command += " -j " + job_fn
 
     if out_fn is not None:
-        command += "-o " + out_fn
+        command += " -o " + out_fn
+
+    if job_name is not None:
+        command += " -n " + job_name
+    
+    if dry_run:
+        command += " --dry-run "
+
 
     if 'dmn' in host:
         p = subprocess.Popen(command, shell=True)
@@ -68,6 +84,9 @@ def local_prepare_staging(file_ls,partner,direction,mode,run_type='auto',job_fn=
     out, err = p.communicate()
     rc = p.returncode        
     
+    if dry_run:
+        print(out, err, rc)
+
     return out, err, rc            
        
 
