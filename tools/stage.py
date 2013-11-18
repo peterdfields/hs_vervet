@@ -8,7 +8,7 @@ import os, sys, socket, subprocess
 
 
 
-def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='auto',job_fn=None,out_fn=None,job_name=None,dry_run=False,verbose=False,project='vervet'):
+def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='auto',afterok=None,afterany=None,startonhold=False,job_fn=None,out_fn=None,job_name=None,verbose=False,project='vervet'):
     """
     this is run anywhere (lws12, mendel login or dmn) and establishes ssh connection to dmn 
     where staging proceeds
@@ -16,6 +16,11 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
     """
         
     verboseprint = print if verbose else lambda *a, **k: None
+    
+    if afterany is None:
+        afterany = []
+    if afterok is None:
+        afterok = []
 
     if type(file_ls_or_fnfname) is str:
         with open(file_ls_or_fnfname,'r') as f:
@@ -61,7 +66,8 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
         verboseprint("Nothing to stage in mode {0}".format(mode))
         return
     
-    
+    #todo: incorporate hold and depend!!!!!    
+
     command = "dmn_stage.py -m {mode} -t {run_type}  {source_base} {target_base} {files}".format(mode=mode,run_type=run_type,source_base=source_base,target_base=destination_base,files=' '.join(file_ls))
 
     if job_fn is not None:
@@ -72,9 +78,14 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
 
     if job_name is not None:
         command += " -n " + job_name
+
+    if afterok:
+        command += " --afterok {}".format(' '.join(afterok))
+    if afterany:
+        command += " --afterok {}".format(' '.join(afterany))
+    if startonhold:
+        command += " -H"
     
-    if dry_run:
-        command += " --dry-run "
 
 
     if 'dmn' in host:
@@ -84,7 +95,7 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
     out, err = p.communicate()
     rc = p.returncode        
     
-    if dry_run:
+    if run_type == 'dry_run':
         print(out, err, rc)
 
     return out, err, rc            
@@ -104,7 +115,7 @@ if __name__ == '__main__':
     parser.add_argument("-p","--partner",choices=['scratch','lab','auto'],default='auto',help="staging partner (source/destination other than /project)")
     parser.add_argument('-d',"--direction",default="in",choices=['in','out'],help="direction of staging (from or to project folder)")
     parser.add_argument("-m","--mode",choices=['non-exist','newer','force'],default='newer',help="Staging mode. Which files should be staged (only non existing, only newer or all.)")
-    parser.add_argument("-t","--run-type",choices=['direct','submit','auto'],default='auto',help='Decides wheter staging should be run on data mover node directly or through qsub. Default (auto) make choice depending on file size and number.')
+    parser.add_argument("-t","--run-type",choices=['direct','submit','auto','dry_run'],default='auto',help='Decides wheter staging should be run on data mover node directly or through qsub. Default (auto) make choice depending on file size and number.')
     parser.add_argument("-j","--job-fname",default=None,help="Full filename of jobfile. By default it is put in ~/vervet_project/staging/...")
     parser.add_argument("-o","--stdout-fname",default=None,help="Full filename of out/err filenames. By default it is put in ~/vervet_project/staging/...")
     parser.add_argument("--dry-run",action="store_true")

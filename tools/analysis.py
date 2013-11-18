@@ -100,13 +100,15 @@ class AnalysisStep(object):
             self.append_job(job)
 
 
-    def run(self,mode=None):
+    def run(self,mode=None,print_summary=False):
         modes=['qsub','local','write_jobscripts']
         if mode is None:
             mode = self.default_run
         if mode not in modes:
             raise Exception("mode must be in {0} but is {1}".format(modes,mode))
         self.prepare_staging()
+        if print_summary:
+            self.print_summary()
         if mode == 'qsub':
             self.qsub()
         elif mode == 'local':
@@ -122,11 +124,11 @@ class AnalysisStep(object):
                 
     def write_jobscripts(self):    
         if self.stagein_job is not None:
-            self.stagein_job.stage(dry_run=True)
+            self.stagein_job.stage(run_type='dry_run')
         for job in self.jobs:
             job.write_jobscript()
         if self.stageout_job is not None:
-            self.stageout_job.stage(dry_run=True)
+            self.stageout_job.stage(run_type='dry_run')
 
     def local_run(self):
         if self.stagein_job is not None:
@@ -146,7 +148,12 @@ class AnalysisStep(object):
             job.write_jobscript()
             job.qsub_jobscript()
         if self.stageout_job is not None:
-            self.stagein_job.stage(run_type='submit')
+            self.stageout_job.stage(run_type='submit')
+            self.stageout_job.release()
+        for job in self.jobs:
+            job.release()
+        if self.stagein_job is not None:
+            self.stagein_job.release()
     
     def print_summary(self,job_summary=True):
         print "="*60
@@ -277,15 +284,20 @@ class Job(object):
                         raise Exception("{0} depending on {1}. Qsub {0} before submitting {1}".format(depend.analysis_step.name+'_'+depend.id,self.analysis_step.name+'_'+self.id))
                     pbs_id = depend.pbs_id.strip()     
                 depend_str = depend_str + (':' if len(depend_str)>0 else '') + pbs_id 
-            command = 'qsub -W depend=afterok:{0} {1}'.format(depend_str,os.path.expanduser(self.file_name))
+            command = 'qsub -h  -W depend=afterok:{0} {1}'.format(depend_str,os.path.expanduser(self.file_name))
             p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         else:
-            command = 'qsub {0}'.format(os.path.expanduser(self.file_name))
+            command = 'qsub -h {0}'.format(os.path.expanduser(self.file_name))
             p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         out, err = p.communicate()
         self.pbs_id = out.strip() 
         self.analysis.append_submit_log(command, out, err)
         return self.pbs_id        
+
+    def release(self):
+        command = "qrls {0}".format(self.pbs_id)
+        #print "releasing", self.name, command
+        p = subprocess.Popen(command, shell=True)
 
     def run_jobscript(self):
         command = os.path.expanduser(self.file_name)
@@ -347,7 +359,7 @@ class StageJob(Job):
             self.files.insert(0,'analyses/'+analysis_step.analysis.name+'/')
 
     
-    def stage(self,run_type='auto',dry_run=False):
+    def stage(self,run_type='auto'):
         # todo: incorporate depends!
         if self.analysis.host == 'lws12':
             partner = 'lab'
@@ -356,7 +368,7 @@ class StageJob(Job):
         id = self.id
         sn = self.analysis_step.short_name
         name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
-        (out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),dry_run=dry_run,job_name=name,verbose=False)
+        (out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,afterok=[job.pbs_id.strip() for job in self.depends],startonhold=True,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,verbose=False)
         #print out, err, rc
         self.returncode = rc
         if run_type == 'submit':

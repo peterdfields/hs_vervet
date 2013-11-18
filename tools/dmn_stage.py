@@ -7,11 +7,16 @@ import numpy as np
 min_mcp_size = 500000000 
 min_qsub_size = 500000000
 
-def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_fn=None,name=None,verbose=False,dry_run=False):
+def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_fn=None,name=None,afterok=None,afterany=None,startonhold=False,verbose=False):
     # this function should only run on dmn,
     # where all file systems are seen
 
     verboseprint = print if verbose else lambda *a, **k: Non
+
+    if afterany is None:
+        afterany = []
+    if afterok is None:
+        afterok = []
 
     host = socket.gethostname()
     if 'dmn' not in host:
@@ -30,7 +35,7 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
         nonexist_file_ls = [file for file in file_ls if not os.path.exists(os.path.join(os.path.expanduser(target_base),file))]
         file_ls = nonexist_file_ls
     
-    if mode == "newer":
+    if mode == "newer" and run_type != 'submit':
         #remove files from file-list that are newer on target than on source
         def add_if_newer(file,file_ls):
             source_time = os.path.getmtime(os.path.join(source_base,file))
@@ -57,7 +62,13 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
 
     sizes = []
     for file in file_ls:
-        sizes.append(os.path.getsize(os.path.join(source_base,file)))
+        try:
+            sizes.append(os.path.getsize(os.path.join(source_base,file)))
+        except OSError, e:
+            #if verbose:
+            raise UserWarning("Can't check size of file. Does not exist. Copy operation might not be optimised. "+str(e))
+            
+            
     sizes=np.array(sizes)
     
     total = sizes.sum()
@@ -74,7 +85,7 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
     
     job_fn = write_jobscript(file_ls,source_base,target_base,mode,method,job_fn,out_fn,name=name)
 
-    if dry_run:
+    if run_type == 'dry_run':
         with open(os.path.expanduser(job_fn),'r') as f:
             for line in f:
                 print(line)
@@ -82,11 +93,31 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
     
 
     if run_type == 'submit' or (run_type == 'auto' and total > min_qsub_size):
-        p = subprocess.Popen("qsub {0}".format(job_fn),shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        ran_as = 'submit'
+        depend_str=''
+        if afterany or afterok:
+            depend_str='-W depend='
+            if afterany:
+                depend_str += 'afterany'
+                for pbs_id in afterany:
+                    depend_str = depend_str + ':' + pbs_id
+            if afterok:
+                if afterany:
+                    depend_str += ','
+                depend_str += 'afterok'
+                for pbs_id in afterok:
+                    depend_str = depend_str + ':' + pbs_id
+                    
+        if startonhold:
+            hold='-h '    
+        else:
+            hold=''
+
+
+        p = subprocess.Popen("qsub {hold}{depend_str} {job_fn}".format(hold=hold,depend_str=depend_str,job_fn=job_fn),shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        #ran_as = 'submit'
     else:
-        p = subprocess.Popen("{0}".format(job_fn),shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        ran_as = 'direct'
+        p = subprocess.Popen(job_fn,shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        #ran_as = 'direct'
     
     out, err = p.communicate()
     rc = p.returncode
@@ -183,18 +214,20 @@ if __name__ == '__main__':
     parser.add_argument("source_base",help="base directiory of source on dmn")
     parser.add_argument("target_base",help="base directiory of target on dmn")
     parser.add_argument("-m","--mode",choices=['non-exist','newer','force'],default='newer',help="Staging mode. Which files should be staged (only non existing, only newer or all.)")
-    parser.add_argument("-t","--run-type",choices=['direct','submit','auto'],default='auto',help='Decides wheter staging should be run on data mover node directly or through qsub. Default (auto) make choice depending on file size and number.')
+    parser.add_argument("-t","--run-type",choices=['direct','submit','auto','dry_run'],default='auto',help='Decides wheter staging should be run on data mover node directly or through qsub. Default (auto) make choice depending on file size and number.')
     parser.add_argument("-j","--job-fname",default=None,help="Full filename of jobfile. By default it is put in ~/vervet_project/staging/...")
     parser.add_argument("-o","--stdout-fname",default=None,help="Full filename of out/err filenames. By default it is put in ~/vervet_project/staging/...")
     parser.add_argument("-n","--job-name",default=None,help="Name used if stage job is subnitted.")
-    parser.add_argument("-d","--dry-run",action="store_true")
+    parser.add_argument("--afterok",nargs='+',help='IDs of jobs that this job depends on. Only runs on exit status 0. See PBS documentation.')
+    parser.add_argument("--afterany",nargs='+',help='IDs of jobs that this job depends on. Runs on any exit status of depend job. See PBS documentation.')
+    parser.add_argument("-H","--start-on-hold",action="store_true",help='Start the job on user hold. Only effective if run type is submit.')
     parser.add_argument("-v","--verbose",action="store_true")
 
     parser.add_argument("path_or_filename",help="Path or filename to stage.", nargs="+")
     
     args = parser.parse_args()
 
-    (out, err, rc) = stage(args.path_or_filename,args.source_base,args.target_base,args.mode,run_type=args.run_type,job_fn=args.job_fname,out_fn=args.stdout_fname,name=args.job_name,dry_run=args.dry_run)
+    (out, err, rc) = stage(args.path_or_filename,args.source_base,args.target_base,args.mode,run_type=args.run_type,afterok=args.afterok,afterany=args.afterany,startonhold=args.start_on_hold,job_fn=args.job_fname,out_fn=args.stdout_fname,name=args.job_name)
 
     print(out,file=sys.stdout)
     print(err,file=sys.stderr)
