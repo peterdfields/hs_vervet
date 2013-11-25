@@ -14,7 +14,7 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
     where staging proceeds
     file_ls_or_fnfname is either a list of files to stage or the path to a file that contains the filenames to stage
     """
-        
+    print(file_ls_or_fnfname)    
     verboseprint = print if verbose else lambda *a, **k: None
     
     if afterany is None:
@@ -63,10 +63,9 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
         file_ls = nonexist_file_ls
     
     if not file_ls:
-        verboseprint("Nothing to stage in mode {0}".format(mode))
-        return
+        print("Nothing to stage in mode {0}".format(mode))
+        return (None, None,0)
     
-    #todo: incorporate hold and depend!!!!!    
 
     command = "dmn_stage.py -m {mode} -t {run_type}  {source_base} {target_base} {files}".format(mode=mode,run_type=run_type,source_base=source_base,target_base=destination_base,files=' '.join(file_ls))
 
@@ -82,11 +81,11 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
     if afterok:
         command += " --afterok {}".format(' '.join(afterok))
     if afterany:
-        command += " --afterok {}".format(' '.join(afterany))
+        command += " --afterany {}".format(' '.join(afterany))
     if startonhold:
         command += " -H"
     
-
+    print(command)
 
     if 'dmn' in host:
         p = subprocess.Popen(command, shell=True)
@@ -95,8 +94,11 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
     out, err = p.communicate()
     rc = p.returncode        
     
-    if run_type == 'dry_run':
-        print(out, err, rc)
+    if run_type != 'submit':
+        if out is not None:
+            print('dmn_stage.py','out:',out, file=sys.stdout)
+        if err is not None:    
+            print('dmn_stage.py','err:',err, file=sys.stderr)
 
     return out, err, rc            
        

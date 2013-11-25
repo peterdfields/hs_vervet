@@ -11,7 +11,7 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
     # this function should only run on dmn,
     # where all file systems are seen
 
-    verboseprint = print if verbose else lambda *a, **k: Non
+    verboseprint = print if verbose else lambda *a, **k: None
 
     if afterany is None:
         afterany = []
@@ -25,6 +25,13 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
     source_base = os.path.expanduser(source_base)
     target_base = os.path.expanduser(target_base)    
     
+    # attention, this is now duplicated (here and in the write_jobscript function), find a solution for this
+    time = datetime.datetime.now().strftime("%Y%m%d-%H.%M%S")
+    if job_fn is None:
+        job_fn = os.path.expanduser("~/vervet_project/staging/jobscript/stage_{}.sh".format(time))
+    if out_fn is None:
+        out_fn = os.path.expanduser("~/vervet_project/staging/log/stage_{}".format(time))
+     
     # all staging modes should preserve timestamp
     modes = ['non-exist','newer','force']
     if mode not in modes:
@@ -35,7 +42,9 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
         nonexist_file_ls = [file for file in file_ls if not os.path.exists(os.path.join(os.path.expanduser(target_base),file))]
         file_ls = nonexist_file_ls
     
-    if mode == "newer" and run_type != 'submit':
+    #print('before:',file_ls)    
+
+    if mode == "newer" and (run_type == 'direct' or run_type == 'auto'):
         #remove files from file-list that are newer on target than on source
         def add_if_newer(file,file_ls):
             source_time = os.path.getmtime(os.path.join(source_base,file))
@@ -47,17 +56,23 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
                 file_ls.append(file)
         newer_on_source = []
         for file in file_ls:
-            if os.path.isdir(file):
+            #print('from filelist:',file)
+            if os.path.isdir(os.path.join(source_base,file)):
+                #print('is a dir:',file)
                 for root, _, fs in os.walk(os.path.join(source_base,file)):
+                    #print('fs:',fs)
                     for f in fs:
+                        #print('f:',f)
                         add_if_newer(os.path.join(root[len(source_base)+1:],f),newer_on_source)
             else:
                 add_if_newer(file,newer_on_source)
         file_ls = newer_on_source
     
+    #print('after',file_ls)    
+
     if not file_ls:
-        verboseprint("Nothing to stage in mode {0}".format(mode))
-        return
+        print("Nothing to stage in mode {0}".format(mode))
+        return (None, None, 0)
         
 
     sizes = []
@@ -65,8 +80,8 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
         try:
             sizes.append(os.path.getsize(os.path.join(source_base,file)))
         except OSError, e:
-            #if verbose:
-            raise UserWarning("Can't check size of file. Does not exist. Copy operation might not be optimised. "+str(e))
+            if verbose:
+                warnings.warn("Can't check size of file. Does not exist. Copy operation might not be optimised. "+str(e),UserWarning)
             
             
     sizes=np.array(sizes)
@@ -83,7 +98,9 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
     else:
         method = 'mcp'
     
-    job_fn = write_jobscript(file_ls,source_base,target_base,mode,method,job_fn,out_fn,name=name)
+    job_fn = write_jobscript(file_ls,source_base,target_base,mode,method,job_fn=job_fn,out_fn=out_fn,name=name)
+
+    #print(job_fn)
 
     if run_type == 'dry_run':
         with open(os.path.expanduser(job_fn),'r') as f:
@@ -105,22 +122,30 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
                     depend_str += ','
                 depend_str += 'afterok'
                 for pbs_id in afterok:
-                    depend_str = depend_str + ':' + pbs_id
-                    
+                    depend_str = depend_str + ':' + pbs_id 
         if startonhold:
             hold='-h '    
         else:
             hold=''
-
-
         p = subprocess.Popen("qsub {hold}{depend_str} {job_fn}".format(hold=hold,depend_str=depend_str,job_fn=job_fn),shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        #ran_as = 'submit'
+        out, err = p.communicate()    #ran_as = 'submit'
     else:
         p = subprocess.Popen(job_fn,shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        out, err = p.communicate()
+        with open(out_fn+'.o','w') as f:
+            f.write(out)
+        with open(out_fn+'.e','w') as f:
+            f.write(err)
         #ran_as = 'direct'
     
-    out, err = p.communicate()
+    
     rc = p.returncode
+
+    if run_type != 'submit':
+        if out is not None:
+            print(job_fn,'out:',out,file=sys.stdout)
+        if err is not None:    
+            print(job_fn,'err:',err,file=sys.stderr)
 
     return (out, err, rc)
 

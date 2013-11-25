@@ -17,6 +17,7 @@ class Analysis(object):
         self.submit_log_fn = os.path.join(self.project,self.ana_dir,'log/', self.name+"_submit_log.txt") 
         for direc in ["_data","log","script","jobscript","io"]:
             hvb.try_make_dirs(os.path.join(self.project,self.ana_dir,direc))
+            hvb.try_make_dirs(os.path.join(self.scratch,self.ana_dir,direc))
         self.steps=[]
 
         
@@ -100,13 +101,15 @@ class AnalysisStep(object):
             self.append_job(job)
 
 
-    def run(self,mode=None,print_summary=False):
+    def run(self,mode=None,print_summary=False,staging=True):
         modes=['qsub','local','write_jobscripts']
         if mode is None:
             mode = self.default_run
         if mode not in modes:
             raise Exception("mode must be in {0} but is {1}".format(modes,mode))
-        self.prepare_staging()
+        if staging == True:
+            print "stage_job_created"
+            self.prepare_staging()
         if print_summary:
             self.print_summary()
         if mode == 'qsub':
@@ -213,6 +216,8 @@ class Job(object):
         self.returncode = None
         if mem is None:
             self.mem = str(ncpus * 3825) + 'mb'
+        else:
+            self.mem = mem
         self.id = str(id)
         if analysis_step is not None:
             self.bind_to_analysis_step(analysis_step)
@@ -240,7 +245,11 @@ class Job(object):
         walltime = self.walltime
         ncpus = self.ncpus
         debug = self.debug
-        mem = self.mem
+        try:
+            mem = self.mem
+        except:
+            print self.name
+            raise
 
         with open(os.path.expanduser(self.file_name), "w") as jf:
             jf.write("#!/bin/bash\n")
@@ -319,6 +328,8 @@ class Job(object):
         print "-"*50
         print self.name
         print "depends on:", [job.name for job in self.depends]
+        print "job filename:", self.file_name
+        print "oe filenames:", self.oe_fn
         print "input files:", self.input_files
         print "output_files:", self.output_files 
         print "-"*50
@@ -368,10 +379,19 @@ class StageJob(Job):
         id = self.id
         sn = self.analysis_step.short_name
         name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
-        (out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,afterok=[job.pbs_id.strip() for job in self.depends],startonhold=True,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,verbose=False)
-        #print out, err, rc
+        if run_type=='dry_run' or run_type=='direct':
+            depends = None
+        else:
+            depends = [job.pbs_id.strip() for job in self.depends]
+        
+        (out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,afterok=depends,startonhold=True,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,verbose=False)
+        if out is not None and out:
+            print >>sys.stdout, 'stage.local_prepare_staging','out:',out 
+        if err is not None:
+            print >>sys.stderr, 'stage.local_prepare_staging','err:',err
         self.returncode = rc
         if run_type == 'submit':
+            print 'that will be the pbs_id', out.strip()
             self.pbs_id = out.strip()
     
 
