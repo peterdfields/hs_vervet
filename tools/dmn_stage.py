@@ -141,11 +141,11 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
     
     rc = p.returncode
 
-    if run_type != 'submit':
-        if out is not None:
-            print(job_fn,'out:',out,file=sys.stdout)
-        if err is not None:    
-            print(job_fn,'err:',err,file=sys.stderr)
+    #if run_type != 'submit':
+    #    if out is not None:
+    #        print(job_fn,'out:',out,file=sys.stdout)
+    #    if err is not None:    
+    #        print(job_fn,'err:',err,file=sys.stderr)
 
     return (out, err, rc)
 
@@ -253,7 +253,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     (out, err, rc) = stage(args.path_or_filename,args.source_base,args.target_base,args.mode,run_type=args.run_type,afterok=args.afterok,afterany=args.afterany,startonhold=args.start_on_hold,job_fn=args.job_fname,out_fn=args.stdout_fname,name=args.job_name)
-
+    
+    #print('in main of dmn_stage,rc:',rc)
     print(out,file=sys.stdout)
     print(err,file=sys.stderr)
     sys.exit(rc)

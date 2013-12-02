@@ -14,7 +14,7 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
     where staging proceeds
     file_ls_or_fnfname is either a list of files to stage or the path to a file that contains the filenames to stage
     """
-    print(file_ls_or_fnfname)    
+    #print(file_ls_or_fnfname)    
     verboseprint = print if verbose else lambda *a, **k: None
     
     if afterany is None:
@@ -85,15 +85,17 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
     if startonhold:
         command += " -H"
     
-    print(command)
+    #print(command)
 
     if 'dmn' in host:
-        p = subprocess.Popen(command, shell=True)
+        p = subprocess.Popen(command, shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     else:
         p = subprocess.Popen("ssh dmn.mendel.gmi.oeaw.ac.at nohup {0}".format(command), shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     out, err = p.communicate()
     rc = p.returncode        
     
+    print('out in stage.py',out)
+
     if run_type != 'submit':
         if out is not None:
             print('dmn_stage.py','out:',out, file=sys.stdout)

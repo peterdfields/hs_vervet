@@ -102,13 +102,15 @@ class AnalysisStep(object):
 
 
     def run(self,mode=None,print_summary=False,staging=True):
-        modes=['qsub','local','write_jobscripts']
+        modes=['qsub','local','write_jobscripts','project_run']
         if mode is None:
             mode = self.default_run
         if mode not in modes:
             raise Exception("mode must be in {0} but is {1}".format(modes,mode))
+        if mode == 'project_run':
+            staging = False
         if staging == True:
-            print "stage_job_created"
+            #print "stage_job_created"
             self.prepare_staging()
         if print_summary:
             self.print_summary()
@@ -118,6 +120,8 @@ class AnalysisStep(object):
             self.local_run()
         elif mode == 'write_jobscripts':
             self.write_jobscripts()
+        elif mode == 'project_run':
+            self.project_run()
     
     def prepare_staging(self):
         if self.stagein: #here we could also check if stagein_job already exists
@@ -141,6 +145,12 @@ class AnalysisStep(object):
             job.run_jobscript()
         if self.stageout_job is not None:
             self.stageout_job.stage(run_type='direct')
+
+    def project_run(self):   
+        for job in self.jobs:
+            job.write_jobscript()
+            job.run_jobscript()
+        
 
     def qsub(self):
         #hold makes sure that the depend jobs are seen by the dependent jobs
@@ -372,7 +382,7 @@ class StageJob(Job):
     
     def stage(self,run_type='auto'):
         # todo: incorporate depends!
-        if self.analysis.host == 'lws12':
+        if self.analysis.host == 'gmi-lws12':
             partner = 'lab'
         else:
             partner = 'scratch'
@@ -385,13 +395,14 @@ class StageJob(Job):
             depends = [job.pbs_id.strip() for job in self.depends]
         
         (out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,afterok=depends,startonhold=True,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,verbose=False)
-        if out is not None and out:
-            print >>sys.stdout, 'stage.local_prepare_staging','out:',out 
-        if err is not None:
-            print >>sys.stderr, 'stage.local_prepare_staging','err:',err
+        #if out is not None and out:
+        #    print >>sys.stdout, 'stage.local_prepare_staging','out:',out 
+        #if err is not None:
+        #    print >>sys.stderr, 'stage.local_prepare_staging','err:',err
         self.returncode = rc
         if run_type == 'submit':
-            print 'that will be the pbs_id', out.strip()
+            print 'that will be the pbs_id', out
+            print self.name
             self.pbs_id = out.strip()
     
 
