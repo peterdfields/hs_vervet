@@ -7,6 +7,8 @@ from hs_vervet.tools import hs_vervet_basics as hvb
 from hs_vervet.tools.stage import local_prepare_staging
 
 
+
+
 class Analysis(object):
     def __init__(self, name=None,project="~/vervet_project",scratch="~/vervet_scratch"):
         self.name = name
@@ -20,12 +22,14 @@ class Analysis(object):
             hvb.try_make_dirs(os.path.join(self.scratch,self.ana_dir,direc))
         self.steps=[]
 
-        
 
     def append_step(self, step):
         self.steps.append(step)
         step.bind_to_analysis(self)
         
+    #def join_steps(self,join_jobs=False,join_jobs_on='id'):
+    #    pass
+
     def append_submit_log(self, jobfile, out, err):
         with open(os.path.expanduser(self.submit_log_fn),'a') as lf:
             date=datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -101,8 +105,46 @@ class AnalysisStep(object):
             self.append_job(job)
 
 
+    def join(self,step,mode='append',join_jobs=False,join_jobs_on='id'):
+        """
+        step will be appended to self
+        """
+        modes = ['append','prepend']
+        if mode not in modes:
+            raise ValueError('mode shoud be in {0} but is {1}'.format(modes,modes))
+        if mode == 'append':
+            self.append_jobs(step.jobs)
+        elif mode == 'prepend':
+            raise UserException('Not implemented.')
+
+        if join_jobs:
+            self.join_jobs(join_on=join_jobs_on)
+        if self.analysis is not None:
+            self.analysis.steps.remove(step)
+
+    def join_jobs(self,join_on='id'):
+        """
+        jobs will be joined and commands joined from left to right
+        """
+        join_ons=['id','all']
+        if join_on not in join_ons:
+            raise ValueError('join_on shoud be in {0} but is {1}'.format(join_ons,join_on))
+        if join_on == 'all':
+            for job in self.jobs[1:]:
+                self.jobs[0].join(job)
+        elif join_on == 'id':
+            ids = [job.id for job in self.jobs]
+            unique_ids = list(set(ids))
+            job_sets = [[job for job in self.jobs if job.id == id] for id in unique_ids]
+            for js in job_sets:
+                for job in js[1:]:
+                    js[0].join(job)
+                
+            
+        
+
     def run(self,mode=None,print_summary=False,staging=True):
-        modes=['qsub','local','write_jobscripts','project_run']
+        modes=['qsub','scratch_run','write_jobscripts','project_run']
         if mode is None:
             mode = self.default_run
         if mode not in modes:
@@ -116,7 +158,7 @@ class AnalysisStep(object):
             self.print_summary()
         if mode == 'qsub':
             self.qsub()
-        elif mode == 'local':
+        elif mode == 'scratch_run':
             self.local_run()
         elif mode == 'write_jobscripts':
             self.write_jobscripts()
@@ -137,19 +179,29 @@ class AnalysisStep(object):
         if self.stageout_job is not None:
             self.stageout_job.stage(run_type='dry_run')
 
-    def local_run(self):
+    def scratch_run(self,parallel=False):
         if self.stagein_job is not None:
             self.stagein_job.stage(run_type='direct')
         for job in self.jobs:
+            job.commands.insert(0,'cd ' + self.analysis.scratch)
             job.write_jobscript()
-            job.run_jobscript()
+        if parallel:
+            hvb.parmap(lambda j: j.run_jobscript(),self.jobs)
+        else:
+            for job in self.jobs:
+                job.run_jobscript()
         if self.stageout_job is not None:
             self.stageout_job.stage(run_type='direct')
 
-    def project_run(self):   
+    def project_run(self,parallel=False):   
         for job in self.jobs:
+            job.commands.insert(0,'cd '+self.analysis.project)
             job.write_jobscript()
-            job.run_jobscript()
+        if parallel:
+            hvb.parmap(lambda j: j.run_jobscript(),self.jobs)
+        else:
+            for job in self.jobs:
+                job.run_jobscript()
         
 
     def qsub(self):
@@ -213,9 +265,13 @@ class AnalysisStep(object):
 
  
 class Job(object):
-    def __init__(self,commands=None, modules=None, analysis_step=None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='08:00:00',ncpus=1, mem=None, debug=False):
+    def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, analysis_step=None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='08:00:00',ncpus=1, mem=None, debug=False):
         self.commands = ([] if commands is None else commands)
+        self.cluster_commands = ([] if cluster_commands is None else cluster_commands)
+        self.local_commands = ([] if local_commands is None else local_commands)
         self.modules = ([] if modules is None else modules)
+        self.cluster_modules = ([] if cluster_modules is None else cluster_modules)
+        self.local_modules = ([] if local_modules is None else local_modules)
         self.depends = ([] if depends is None else depends)
         self.input_files = ([] if input_files is None else input_files)
         self.output_files = ([] if output_files is None else output_files)
@@ -248,9 +304,23 @@ class Job(object):
         if self.debug:
             self.oe_fn+='_debug'
 
+    def join(self,job):
+        """
+        appends job commands and modules to self
+        """
+        self.modules += job.modules
+        self.modules = list(set(self.modules))
+        self.commands += job.commands
+        self.input_files += job.input_files
+        self.output_files += job.output_files
+        if self.analysis_step is not None:
+            self.analysis_step.jobs.remove(job)
+        
+
     def write_jobscript(self):
-        commands = self.commands
-        modules = self.modules
+        
+        commands = (self.local_commands if 'lws12' in self.analysis.host else self.cluster_commands) +  self.commands
+        modules = self.modules + (self.local_modules if 'lws12' in self.analysis.host else self.cluster_modules) 
         id = self.id
         walltime = self.walltime
         ncpus = self.ncpus
