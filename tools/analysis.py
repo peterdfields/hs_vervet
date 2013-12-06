@@ -143,7 +143,7 @@ class AnalysisStep(object):
             
         
 
-    def run(self,mode=None,print_summary=False,staging=True):
+    def run(self,mode=None,print_summary=False,staging=True,parallel=False):
         modes=['qsub','scratch_run','write_jobscripts','project_run']
         if mode is None:
             mode = self.default_run
@@ -159,22 +159,25 @@ class AnalysisStep(object):
         if mode == 'qsub':
             self.qsub()
         elif mode == 'scratch_run':
-            self.local_run()
+            self.scratch_run(parallel=parallel)
         elif mode == 'write_jobscripts':
             self.write_jobscripts()
         elif mode == 'project_run':
-            self.project_run()
+            self.project_run(parallel=parallel)
     
     def prepare_staging(self):
         if self.stagein: #here we could also check if stagein_job already exists
             self.add_stagein()
         if self.stageout:
             self.add_stageout()
-                
+    
+    #combine all the following methods to avoid parallelism!!!
+            
     def write_jobscripts(self):    
         if self.stagein_job is not None:
             self.stagein_job.stage(run_type='dry_run')
         for job in self.jobs:
+            job.commands.insert(0,'PROJECT_HOME=' + self.analysis.scratch)
             job.write_jobscript()
         if self.stageout_job is not None:
             self.stageout_job.stage(run_type='dry_run')
@@ -183,7 +186,7 @@ class AnalysisStep(object):
         if self.stagein_job is not None:
             self.stagein_job.stage(run_type='direct')
         for job in self.jobs:
-            job.commands.insert(0,'cd ' + self.analysis.scratch)
+            job.commands.insert(0,'PROJECT_HOME=' + self.analysis.scratch)
             job.write_jobscript()
         if parallel:
             hvb.parmap(lambda j: j.run_jobscript(),self.jobs)
@@ -195,7 +198,7 @@ class AnalysisStep(object):
 
     def project_run(self,parallel=False):   
         for job in self.jobs:
-            job.commands.insert(0,'cd '+self.analysis.project)
+            job.commands.insert(0,'PROJECT_HOME='+self.analysis.project)
             job.write_jobscript()
         if parallel:
             hvb.parmap(lambda j: j.run_jobscript(),self.jobs)
@@ -210,6 +213,7 @@ class AnalysisStep(object):
         if self.stagein_job is not None:
             self.stagein_job.stage(run_type='submit')
         for job in self.jobs:
+            job.commands.insert(0,'PROJECT_HOME=' + self.analysis.scratch)
             job.write_jobscript()
             job.qsub_jobscript()
         if self.stageout_job is not None:
@@ -262,16 +266,17 @@ class AnalysisStep(object):
         stageout_job = StageJob(direction='out',files=out_files,analysis_step=self,stage_analysis_dir=stage_analysis_dir,depends=[job for job in self.jobs])
         self.stageout_job = stageout_job       
         
+    def remove_correctly_finished_jobs(self):
+        self.jobs = [job for job in self.jobs if not job.ran_noerror()]
+
+
+class JoinedStep(AnalysisStep):
+    def __init__(self):
+        pass
 
  
 class Job(object):
-    def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, analysis_step=None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='08:00:00',ncpus=1, mem=None, debug=False):
-        self.commands = ([] if commands is None else commands)
-        self.cluster_commands = ([] if cluster_commands is None else cluster_commands)
-        self.local_commands = ([] if local_commands is None else local_commands)
-        self.modules = ([] if modules is None else modules)
-        self.cluster_modules = ([] if cluster_modules is None else cluster_modules)
-        self.local_modules = ([] if local_modules is None else local_modules)
+    def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, analysis_step=None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='08:00:00',ncpus=1, mem=None, exit_on_error=True, debug=False):
         self.depends = ([] if depends is None else depends)
         self.input_files = ([] if input_files is None else input_files)
         self.output_files = ([] if output_files is None else output_files)
@@ -280,6 +285,7 @@ class Job(object):
         self.debug = debug
         self.pbs_id = None
         self.returncode = None
+        self.exit_on_error = exit_on_error
         if mem is None:
             self.mem = str(ncpus * 3825) + 'mb'
         else:
@@ -287,10 +293,21 @@ class Job(object):
         self.id = str(id)
         if analysis_step is not None:
             self.bind_to_analysis_step(analysis_step)
+            if self.analysis_step.analysis is not None:
+                host = self.analysis.host
+            else:
+                host = socket.gethostname()
         else:
             self.name = None
             self.analysis_step = None
             self.file_name = None
+            host = socket.gethostname()
+        cluster_commands = ([] if cluster_commands is None else cluster_commands)
+        local_commands = ([] if local_commands is None else local_commands)
+        self.commands = ["cd $PROJECT_HOME"] + (local_commands if 'lws12' in host else cluster_commands) +  ([] if commands is None else commands)
+        cluster_modules = ([] if cluster_modules is None else cluster_modules)
+        local_modules = ([] if local_modules is None else local_modules)
+        self.modules = ([] if modules is None else modules) + (local_modules if 'lws12' in host else cluster_modules)
         if self.analysis_step is not None and append_to_ana:
             self.analysis_step.append_job(self)
 
@@ -315,12 +332,21 @@ class Job(object):
         self.output_files += job.output_files
         if self.analysis_step is not None:
             self.analysis_step.jobs.remove(job)
-        
+
+    
+    def ran_noerror(self):
+        f = os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn,'.e')        
+        if os.path.isfile(f) and os.path.getsize(f) == 0:
+            ran_noerror = True
+        else:
+            ran_noerror = False
+        return ran_noerror
+
 
     def write_jobscript(self):
         
-        commands = (self.local_commands if 'lws12' in self.analysis.host else self.cluster_commands) +  self.commands
-        modules = self.modules + (self.local_modules if 'lws12' in self.analysis.host else self.cluster_modules) 
+        commands = self.commands
+        modules = self.modules 
         id = self.id
         walltime = self.walltime
         ncpus = self.ncpus
@@ -347,12 +373,19 @@ class Job(object):
             jf.write("#PBS -o {}.o\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
             jf.write("#PBS -e {}.e\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
 
+            if self.exit_on_error:
+                jf.write("set -e\n")
             #load modules:
             for module in modules:
                 jf.write("module load {}\n".format(module))
             #command:
             for command in commands:
+                #try:
                 jf.write(command)
+                #except:
+                #    print 'command:',  command
+                #    print 'commands:', commands
+                #    raise
                 jf.write('\n')
         self.chmod_jobscript()
         #return jfn
