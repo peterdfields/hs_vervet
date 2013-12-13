@@ -158,7 +158,7 @@ if __name__ == '__main__':
     sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
     #from hs_vervet.tools import hs_vervet_basics as hvb
     #from hs_vervet.tools import stats_on_data as sod
-    from pymodule.yhio.VCFFile import VCFFile
+    import vcf
     import argparse
     
     parser=argparse.ArgumentParser(description="Return macaque state for each SNP. Output  \
@@ -179,16 +179,22 @@ if __name__ == '__main__':
         start=time.clock()
 
     out_file=open(args.out_file,'w')
-    vcf = VCFFile(inputFname=args.vcf_file,minDepth=0)
+    vcf = vcf.Reader(open(args.vcf_file,'r'))
+
     if args.verbose:
         print args.vcf_file, "loaded"
     snp_pos=[]
     ref=[]
     alt=[]
     for record in vcf:
-        snp_pos.append(record.pos)
-        ref.append(record.refBase)
-        alt.append(record.altBase)
+        if record.FILTER:
+            continue
+        if not record.is_snp:
+            continue
+        snp_pos.append(record.POS)
+        ref.append(record.REF)
+        alt.append(record.ALT[0])
+
     snp_df=pd.DataFrame({'alt':alt,'ref':ref},index=np.array(snp_pos)-1)
     
     if args.verbose:
