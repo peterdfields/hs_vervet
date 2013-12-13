@@ -21,7 +21,7 @@ class Analysis(object):
             hvb.try_make_dirs(os.path.join(self.project,self.ana_dir,direc))
             hvb.try_make_dirs(os.path.join(self.scratch,self.ana_dir,direc))
         self.steps=[]
-
+        subprocess.Popen("cd {}/script/hs_vervet && git pull origin master".format(self.scratch),shell=True)
 
     def append_step(self, step):
         self.steps.append(step)
