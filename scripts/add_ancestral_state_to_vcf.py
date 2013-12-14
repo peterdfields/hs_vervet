@@ -33,7 +33,7 @@ for record in vcf_reader:
         aa = anc_df.loc[record.POS-1][args.outgroup]
         if type(aa)==str:
             record.INFO.update({'AA':aa})
-    except KeyError:
+    except IndexError:
         pass
     vcf_writer.write_record(record)
 vcf_writer.flush()

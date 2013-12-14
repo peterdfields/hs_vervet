@@ -335,7 +335,7 @@ class Job(object):
 
     
     def ran_noerror(self):
-        f = os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn,'.e')        
+        f = os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn+'.e')
         if os.path.isfile(f) and os.path.getsize(f) == 0:
             ran_noerror = True
         else:

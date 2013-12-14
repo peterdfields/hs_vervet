@@ -4,14 +4,17 @@ sys.path.insert(0, os.path.expanduser('~/lib/python'))
 sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
 
 
-genotype_dict={None:['N','N'],'0/0':[0,0],'0/1':[0,1],'1/0':[1,0],'1/1':[1,1],'0|0':[0,0],'0|1':[0,1],'1|0':[1,0],'1|1':[1,1]}
 
 
-def vcf_to_tsv(in_vcf,out_fn,interval=None,include_triallelic=False,keep_original_id=False,include_filtered=False):
+
+def vcf_to_tsv(in_vcf,out_fn,interval=None,dont_randomise_unphased=False,include_triallelic=False,keep_original_id=False,include_filtered=False,encode_ancestral_derived=False,verbose=False):
     """
-    First argument should be a file-stream or file
+    Reads a vcf and outputs a tsv where each row is one SNP and each column is one allele of an individual.
+    The first two rows and columns are labels, chrom pos, and ucla_id first/second allele, respectively.
+    First argument should be a file-stream or file.
     """ 
     import vcf
+    import random
     
     def try_fetch(reader,*args):
         try:
@@ -32,6 +35,10 @@ def vcf_to_tsv(in_vcf,out_fn,interval=None,include_triallelic=False,keep_origina
 
     reader = vcf.Reader(in_vcf)
     
+    if encode_ancestral_derived:
+        if 'AA' not in reader.infos.keys():
+            raise Exception('For encoding ancestral/derived, there must be an info tag "AA" for the alternative allele.')
+
     if interval is not None:
         interval1  = interval.split(':')
         chrom = interval1[0]
@@ -40,9 +47,9 @@ def vcf_to_tsv(in_vcf,out_fn,interval=None,include_triallelic=False,keep_origina
         elif len(interval1)==2:
             start_end = interval1[1].split('-')
             start = start_end[0]
-            if len(start_end)==1:
+            if len(start_end) == 1:
                 reader = try_fetch(reader,chrom,start)
-            elif len(start_end)==2:
+            elif len(start_end) == 2:
                 end = start_end[1]
                 reader = try_fetch(reader,chrom,start,end)
             else:
@@ -72,18 +79,48 @@ def vcf_to_tsv(in_vcf,out_fn,interval=None,include_triallelic=False,keep_origina
         f.write('\t'.join(header1)+'\n')
         f.write('\t'.join(header2)+'\n')
         for record in reader:
+            if dont_randomise_unphased:
+                het0 = 0
+                het1 = 1
+            else:
+                het0 = random.randint(0,1)
+                het1 = abs(het0-1)
+            genotype_dict={None:['N','N'],'0/0':[0,0],'0/1':[het0,het1],'1/1':[1,1],'0|0':[0,0],'0|1':[0,1],'1|0':[1,0],'1|1':[1,1]}
             if not include_triallelic:
                 if len(record.ALT)>1:
+                    if verbose:
+                        print record.CHROM,record.POS,"skipped because more than 2 alleles."
                     continue
             if not include_filtered:
                 if record.FILTER:
+                    if verbose:
+                        print record.CHROM,record.POS,"skipped because of filters {}.".format(record.FILTER)
                     continue
+            if encode_ancestral_derived:
+                try:
+                    aa = record.INFO['AA']
+                except KeyError:
+                    if verbose:
+                        print record.CHROM,record.POS,"skipped because no ancestral state info."
+                    continue
+                if (aa != record.REF) and (aa != record.ALT[0].sequence):
+                    if verbose:
+                        print record.CHROM,record.POS,"skipped because of ancestral state={0} neither ref={1} or alt={2}".format(aa,record.REF,record.ALT[0])
+                    continue
+                if  aa == record.ALT[0].sequence:                    
+                    genotype_dict={None:['N','N'],'0/0':[1,1],'0/1':[het0,het1],'1/1':[1,1],'0|0':[1,1],'0|1':[1,0],'1|0':[0,1],'1|1':[0,0]}
+                elif aa == record.REF:
+                    pass
+                else:
+                    raise Exception('Alternative allele not recognised.')
             line = []
             line.append(record.CHROM)
             line.append(str(record.POS))
             genotypes_row = [str(k) for id1 in ids_original for k in genotype_dict[record.genotype(id1)['GT']]]
             line = line + genotypes_row
             f.write('\t'.join(line)+'\n')
+            if verbose:
+                print record.CHROM,record.POS, 'written to output'
         
 
 
@@ -107,14 +144,17 @@ if __name__ == '__main__':
 
     import argparse
 
-    parser=argparse.ArgumentParser(description="Parse VCF into a 0/1 genotype tsv file.")
+    parser=argparse.ArgumentParser(description="Parse VCF into a 0/1 (pseudo-)haplotype tsv file. (If not phased, the alleles are randomly assigned to haplotypes in heterozygotes.)")
     #the following allows piping the vcf as input stream
     parser.add_argument('in_vcf', type = argparse.FileType('r'), default = '-',help="VCF filename to parse.")
     parser.add_argument("out_fn",help="Filename of tsv to output.")
     parser.add_argument("-L","--interval",default=None,help="Target intervals of the form: 'chrom:[start-end]'")
+    parser.add_argument("--dont-randomise-unphased",action='store_true',help='By default, unphased hets are are randomly assigned 0 1 or 1 0.')
     parser.add_argument("--include-triallelic",action="store_true")
     parser.add_argument("--keep-original-id",action="store_true",help='If not specified, the script tries to convert read-group id into ucla_id')
     parser.add_argument("--include-filtered",action="store_true",help='By default SNPs which do not have PASS in the filter column are excluded.')
-    #parser.add_argument("input_vcf",help="VCF filename to parse.")
+    parser.add_argument("--encode-ancestral-derived",action="store_true",help='0/1 encodes ancestral/derived instead of ref/alt. Option only uses SNPs that have an AA tag in the INFO column. SNPs where AA is a third allele are excluded.')
+    parser.add_argument("-v","--verbose",action="store_true",help="Verbose mode.")
+    
     arg_dict = vars(parser.parse_args())
     vcf_to_tsv(**arg_dict)

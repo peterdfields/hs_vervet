@@ -187,8 +187,8 @@ if __name__ == '__main__':
     ref=[]
     alt=[]
     for record in vcf:
-        if record.FILTER:
-            continue
+        #if record.FILTER:
+        #    continue
         if not record.is_snp:
             continue
         snp_pos.append(record.POS)
