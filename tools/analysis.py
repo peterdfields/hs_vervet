@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-
+"""
+"""
 import sys, os, datetime, subprocess, socket, filecmp
 sys.path.insert(0, os.path.expanduser('~/lib/python'))
 sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
@@ -17,7 +18,7 @@ class Analysis(object):
         self.project = project
         self.ana_dir = os.path.join('analyses/',self.name)
         self.submit_log_fn = os.path.join(self.project,self.ana_dir,'log/', self.name+"_submit_log.txt") 
-        for direc in ["_data","log","script","jobscript","io"]:
+        for direc in ["_data","log","script","jobscript","io","output"]:
             hvb.try_make_dirs(os.path.join(self.project,self.ana_dir,direc))
             hvb.try_make_dirs(os.path.join(self.scratch,self.ana_dir,direc))
         self.steps=[]

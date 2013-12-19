@@ -1,41 +1,49 @@
 #!/usr/bin/env python
 import os, sys
-import pandas as pd
 import vcf
-import argparse
+import argparse, pickle
 
-parser = argparse.ArgumentParser(description="Print some statistics about the SNPs in the vcf.\
-                                 from the outgroup in the input tsv. Input should be produced with the script \
-                                 vervet_snp_other_species_state.py ")
-parser.add_argument("outgroup_state_tsv",help="tsv with outgroup state produced by vervet_snp_other_species_state.py")
-parser.add_argument("in_vcf",help="Input vcf filename.")
-parser.add_argument("out_vcf",help="Output vcf filename.")
-parser.add_argument("-o","--outgroup",default='macaque',help="name of the outgroup")
+parser = argparse.ArgumentParser(description="Print some statistics about the variants in the vcf.")
+parser.add_argument('in_vcf', type = argparse.FileType('r'), default = '-',help="VCF filename to parse.")
+parser.add_argument("-o","--out-fn",type = argparse.FileType('w'), default = '-',help="name of the outgroup")
 
 args = parser.parse_args()
 
-def get_absolute_path(fn):
-    if fn[0]=='/':
-        return fn
+reader = vcf.Reader(args.in_vcf)
+
+
+var_stats = {'total':0,'snps':0,'indels':0,'other_variants':0,'pass':0,'filters':{k:0 for k in reader.filters.keys()}}
+
+if 'AA' in reader.infos.keys():
+    var_stats.update({'ancestral_known':0})
+    var_stats.update({'pass_ancestral_known':0})
+
+for record in reader:
+    s = var_stats
+    s['total']+=1
+    if record.is_snp:
+        s['snps'] += 1
+    elif record.is_indel:
+        s['indels'] += 1
     else:
-        return os.path.join(os.getcwd(),fn)
+        s['other_variants'] += 1
+    if not record.FILTER:
+        s['pass'] += 1
+    else:
+        for ft in record.FILTER:
+            s['filters'][ft]+=1
+            
+    if 'ancestral_known' in s.keys():
+        try:
+            aa = record.INFO['AA']
+        except KeyError:
+            continue
+        if aa in ['A','C','T','G']:
+            s['ancestral_known'] += 1
+            if not record.FILTER:
+                s['pass_ancestral_known'] += 1
+        else:
+            raise ValueError(record.CHROM+' '+str(record.POS)+' alternative allele has unknown state {}'.format(aa))
 
-anc_df_fn = get_absolute_path(args.outgroup_state_tsv)
-
-anc_df = pd.read_csv(anc_df_fn,sep='\t',index_col=0)
-
-vcf_reader = vcf.Reader(filename=get_absolute_path(args.in_vcf))
-vcf_reader.infos.update({'AA':vcf.parser._Info('AA', '1', 'String', 'Ancestral Allele as derived from {}'.format(args.outgroup))})
-vcf_writer = vcf.Writer(open(get_absolute_path(args.out_vcf), 'w'), vcf_reader)
-
-for record in vcf_reader:
-    try:
-        aa = anc_df.loc[record.POS-1][args.outgroup]
-        if type(aa)==str:
-            record.INFO.update({'AA':aa})
-    except IndexError:
-        pass
-    vcf_writer.write_record(record)
-vcf_writer.flush()
-vcf_writer.close()
+pickle.dump(s,args.out_fn)
 
