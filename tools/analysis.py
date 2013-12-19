@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-
+"""
+"""
 import sys, os, datetime, subprocess, socket, filecmp
 sys.path.insert(0, os.path.expanduser('~/lib/python'))
 sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
@@ -17,7 +18,7 @@ class Analysis(object):
         self.project = project
         self.ana_dir = os.path.join('analyses/',self.name)
         self.submit_log_fn = os.path.join(self.project,self.ana_dir,'log/', self.name+"_submit_log.txt") 
-        for direc in ["_data","log","script","jobscript","io"]:
+        for direc in ["_data","log","script","jobscript","io","output"]:
             hvb.try_make_dirs(os.path.join(self.project,self.ana_dir,direc))
             hvb.try_make_dirs(os.path.join(self.scratch,self.ana_dir,direc))
         self.steps=[]
@@ -143,7 +144,7 @@ class AnalysisStep(object):
             
         
 
-    def run(self,mode=None,print_summary=False,staging=True,parallel=False):
+    def run(self,mode=None,print_summary=False,staging=True,parallel=False,nprocs='auto'):
         modes=['qsub','scratch_run','write_jobscripts','project_run']
         if mode is None:
             mode = self.default_run
@@ -159,11 +160,11 @@ class AnalysisStep(object):
         if mode == 'qsub':
             self.qsub()
         elif mode == 'scratch_run':
-            self.scratch_run(parallel=parallel)
+            self.scratch_run(parallel=parallel,nprocs=nprocs)
         elif mode == 'write_jobscripts':
             self.write_jobscripts()
         elif mode == 'project_run':
-            self.project_run(parallel=parallel)
+            self.project_run(parallel=parallel,nprocs=nprocs)
     
     def prepare_staging(self):
         if self.stagein: #here we could also check if stagein_job already exists
@@ -182,26 +183,32 @@ class AnalysisStep(object):
         if self.stageout_job is not None:
             self.stageout_job.stage(run_type='dry_run')
 
-    def scratch_run(self,parallel=False):
+    def scratch_run(self,parallel=False,nprocs='auto'):
         if self.stagein_job is not None:
             self.stagein_job.stage(run_type='direct')
         for job in self.jobs:
             job.commands.insert(0,'PROJECT_HOME=' + self.analysis.scratch)
             job.write_jobscript()
         if parallel:
-            hvb.parmap(lambda j: j.run_jobscript(),self.jobs)
+            if nprocs == 'auto':
+                hvb.parmap(lambda j: j.run_jobscript(),self.jobs)
+            else:
+                hvb.parmap(lambda j: j.run_jobscript(),self.jobs,nprocs=nprocs)
         else:
             for job in self.jobs:
                 job.run_jobscript()
         if self.stageout_job is not None:
             self.stageout_job.stage(run_type='direct')
 
-    def project_run(self,parallel=False):   
+    def project_run(self,parallel=False,nprocs='auto'):   
         for job in self.jobs:
             job.commands.insert(0,'PROJECT_HOME='+self.analysis.project)
             job.write_jobscript()
         if parallel:
-            hvb.parmap(lambda j: j.run_jobscript(),self.jobs)
+            if nprocs == 'auto':
+                hvb.parmap(lambda j: j.run_jobscript(),self.jobs)
+            else:
+                hvb.parmap(lambda j: j.run_jobscript(),self.jobs,nprocs=nprocs)
         else:
             for job in self.jobs:
                 job.run_jobscript()
