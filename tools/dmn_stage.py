@@ -192,7 +192,7 @@ def write_jobscript(file_ls,source_base,destination_base,mode,method='mcp',job_f
         #PBS -o {out_fn}.o
         #PBS -e {out_fn}.e
         #PBS -l select=1:ncpus=1
-        #PBS -l walltime=00:05:00
+        #PBS -l walltime=00:25:00
         cd {source_base}
         cp -{options} --parents {source} {destination_base}/
         """.format(name=name,out_fn=out_fn,source_base=source_base,options=options,source=' '.join([f for f in file_ls]),destination_base=destination_base))
