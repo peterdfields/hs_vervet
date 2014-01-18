@@ -104,15 +104,17 @@ class Analysis(object):
     analysis.join_steps()
     
     """
-    def __init__(self, name=None,description=None,project="~/vervet_project",scratch="~/vervet_scratch"):
+    def __init__(self, name=None,description=None,project_dir_prefix="vervet",project_name="vervetmonkey",verbose=0):
         callingframe = sys._getframe(1)
         c = callingframe.f_locals["__file__"]
         self.calling_fn = os.path.join(os.getcwdu(),
                 (c if c[:2]!='./' else c[2:]))
         self.name = name
         self.host = socket.gethostname()
-        self.scratch = scratch
-        self.project = project
+        self.scratch = os.path.join("~", project_dir_prefix + "_scratch")
+        self.project =  os.path.join("~", project_dir_prefix + "_project")
+        self.dir_prefix = project_dir_prefix
+        self.project_name = project_name 
         self.description = description
         self.ana_dir = os.path.join('analyses/',self.name)
         self.submit_log_fn = os.path.join(self.project,self.ana_dir,'log/', self.name+"_submit_log.txt") 
@@ -128,6 +130,9 @@ class Analysis(object):
                 pass
             else:
                 raise
+        self.verbose = verbose
+        self.vprint = lambda text, min_verb=0: v_print(text,min_verb,self.verbose)
+    
             
             
         #subprocess.Popen("cd {}/script/hs_vervet && git pull origin master".format(self.scratch),shell=True)
@@ -141,7 +146,7 @@ class Analysis(object):
 
     def append_submit_log(self, jobfile, out, err):
         with open(os.path.expanduser(self.submit_log_fn),'a') as lf:
-            date=datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            date = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
             lf.write(date+'\t'+jobfile+'\t'+out+'\t'+err+'\n')
     def write_and_qsub_all(self):
         for step in self.steps:
@@ -156,7 +161,7 @@ class Analysis(object):
 
 class Step(object):
 
-    def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, description=None, depend_steps=None, stagein=True, stageout=True, default_run='qsub',  check_date_input = True, verbose = False):
+    def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, description=None, depend_steps=None, stagein=True, stageout=True, default_run='qsub',  check_date_input = True, verbose = None):
         # the next to lines are just for the following methods to work
         # the attributes will be set again by their constructors
         self.name = name
@@ -167,6 +172,7 @@ class Step(object):
         self.stagein_job = None
         self.stageout_job = None
         self.description = None
+        self.verbose = verbose
         if analysis is None:
             self.analysis = analysis
         else: 
@@ -202,6 +208,9 @@ class Step(object):
         #self.out_fname = os.path.join(self.analysis.ana_dir,'io/',self.name+'.out')    
         for job in self.jobs:
             job.analysis = analysis
+        if self.verbose is None:
+            self.verbose=analysis.verbose
+        self.vprint = lambda text, min_verb=0: v_print(text,min_verb,self.verbose)
         
     def append_job(self, job):
         #only add the job if it is not added yet
@@ -269,7 +278,7 @@ class Step(object):
             #print "stage_job_created"
             self.prepare_staging()
         if print_summary:
-            self.print_summary()
+            self.vprint_summary()
         if mode == 'qsub':
             self.qsub()
         elif mode == 'scratch_run':
@@ -337,8 +346,9 @@ class Step(object):
             job.write_jobscript()
             job.qsub_jobscript()
         if self.stageout_job is not None:
-            self.stageout_job.stage(run_type='submit')
-            self.stageout_job.release()
+            self.stageout_job.write_prepare_jobscript()
+            self.stageout_job.qsub_prepare_jobscript()
+            #self.stageout_job.release()
         for job in self.jobs:
             job.release()
         if self.stagein_job is not None:
@@ -524,8 +534,10 @@ class Job(object):
         self.chmod_jobscript()
         #return jfn
     
-    def chmod_jobscript(self):
-        p = subprocess.call(['chmod','ug+x',os.path.expanduser(self.file_name)])
+    def chmod_jobscript(self,file='auto'):
+        if file=='auto':
+            file = self.file_name
+        p = subprocess.call(['chmod','ug+x',os.path.expanduser(file)])
         #out, err = p.communicate()
         
 
@@ -583,7 +595,7 @@ class Job(object):
         
 
 class StageJob(Job):
-    def __init__(self,  direction, files=None, step=None, stage_analysis_dir=True, mode='newer',depends=None,  verbose=False, debug=False):
+    def __init__(self,  direction, files=None, step=None, stage_analysis_dir=True, mode='newer',depends=None,  verbose=None, debug=False):
         if direction not in ['in','out']:
             raise ValueError('direction should be "in" or "out" but is {}'.format(direction))
         self.direction = direction
@@ -592,6 +604,7 @@ class StageJob(Job):
         self.debug = debug
         self.stage_analysis_dir = stage_analysis_dir
         self.mode = mode
+        self.verbose = verbose
         if step is not None:
             self.bind_to_step(step)
         else:
@@ -600,7 +613,6 @@ class StageJob(Job):
             self.file_name = None
             self.id = None
             self.stage_fn = None
-        self.verbose = verbose
         self.input_files = None
         self.output_files = None    
         
@@ -615,8 +627,15 @@ class StageJob(Job):
         self.scratch = ('~/vervet_lab' if hid == 'lws12' else '~/vervet_scratch')
         if self.stage_analysis_dir:
             self.files.insert(0,'analyses/'+step.analysis.name+'/')
+        if self.verbose is None:
+            self.verbose = step.verbose
+        self.vprint = lambda text, min_verb=0: v_print(text,min_verb,self.verbose)
+        #choose appropriate name and use this, attention with different file systems...
+        #-> different files for local and remote ...
+        #print self.oe_fn
+        #print self.analysis.project
+        self.local_output = os.path.join(self.analysis.project, self.oe_fn+'_local.o')
 
-    
     def stage(self,run_type='auto'):
         # todo: incorporate depends!
         if self.analysis.host == 'gmi-lws12':
@@ -630,42 +649,35 @@ class StageJob(Job):
             depends = None
         else:
             depends = [job.pbs_id.strip() for job in self.depends]
-        
-        (out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,afterok=depends,startonhold=True,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,verbose=False)
+        #print self.local_output
+        (out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,afterok=depends,startonhold=True,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,project=self.analysis.dir_prefix,verbose=self.verbose,file_to_print_to=self.local_output)
         #if out is not None and out:
         #    print >>sys.stdout, 'stage.local_prepare_staging','out:',out 
         #if err is not None:
         #    print >>sys.stderr, 'stage.local_prepare_staging','err:',err
         self.returncode = rc
+        #print "ana_stage, out",out
+        #print "ana_stage,err", err
         if run_type == 'submit':
-            print 'that will be the pbs_id', out
-            print self.name
+            #print self.name,'submitted with pbs_id', out
+            #print self.name
             self.pbs_id = out.strip()
-    
-
-
-
-    def write_stage_fn_file(self):
-        with open(os.path.expanduser(self.stage_fn),'w') as f:
-            for fn in self.files:
-                f.write(fn+'\n')    
-
-    def write_jobscript(self, mode='rsync',write_fn_file=True):
-        if write_fn_file:
-            self.write_stage_fn_file()
-        # how should this function know where the dirs are -> check self.analysis.host !
-        modes = ['rsync']
-        source_dir = (self.analysis.project if self.direction == 'in' else self.scratch)
-        target_dir = (self.scratch if self.direction == 'in' else self.analysis.project)
-
+        
+    #the following two functions are only used by the stage-out job
+    #this is basically a dummy job that tests first how much files really need to be staged and
+    #then submits or directly runs a job accordingly
+    def write_prepare_jobscript(self):
         mem = '3825mb'
         ncpus = 1
-        walltime = '04:00:00'
-        if mode not in modes:
-            raise ValueError('mode must be in {0} but is {1}'.format(modes, mode))
-        jfn = os.path.expanduser(self.file_name)
-        with open(os.path.expanduser(self.file_name),'w') as jf: 
-
+        walltime = '00:20:00'
+        id = self.id
+        sn = self.step.short_name
+        name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
+#        if mode not in modes:
+#            raise ValueError('mode must be in {0} but is {1}'.format(modes, mode))
+#        jfn = os.path.expanduser(self.file_name)
+        fn = os.path.splitext(self.file_name)[0] + "_prep" + os.path.splitext(self.file_name)[1]
+        with open(os.path.expanduser(fn),'w') as jf: 
             jf.write("#!/bin/bash\n")
             id = self.id
             sn = self.step.short_name
@@ -673,25 +685,95 @@ class StageJob(Job):
             jf.write("#PBS -N {0}\n".format(name))
             jf.write("#PBS -q staging\n")
             jf.write("#PBS -P vervetmonkey\n")
-            jf.write("#PBS -o {0}.o\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
-            jf.write("#PBS -e {0}.e\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+            jf.write("#PBS -o {0}_prep.o\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+            jf.write("#PBS -e {0}_prep.e\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
             jf.write("#PBS -l mem={0}\n".format(mem))
             jf.write("#PBS -l ncpus={0}\n".format(ncpus))
             jf.write("#PBS -l walltime={0}\n".format(walltime))
-            commands = ['echo start','date','date1=$(date +"%s")',
-                        'stage_fn={0}'.format(self.stage_fn),"rsync --files-from=$stage_fn -aur {source} {target}".format(source=source_dir, target=target_dir),
-                        'date2=$(date +"%s")',
-                        'diff=$(($date2-$date1))',
-                         """if [ "$diff" -lt 10 ]
-then
-sleep 10   
-fi""",'echo end','date']
+            commands = ["stage -p scratch -d out -m {mode} -p {project} -v {verbose} -l {print_to} -j {job_fn} -o {out_fn} -n {job_name} {files}".format(
+                mode=self.mode,
+                project=self.analysis.dir_prefix, verbose=self.verbose, print_to=self.local_output,job_fn=self.file_name,
+                out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,files=" ".join(self.files))]            
             for command in commands:
                 jf.write(command)
                 jf.write('\n')
-        self.chmod_jobscript()
-        if self.verbose:
-            print jfn, 'written'
+        #implement the following...
+        self.chmod_jobscript(fn)
+        self.prep_file_name = fn
+        return fn
+
+        
+    def qsub_prepare_jobscript(self):
+        depend_str=''
+        if self.depends:
+            for depend in self.depends:
+                if type(depend) == str:
+                    pbs_id = depend.strip()
+                else:
+                    if depend.pbs_id == None:
+                        raise Exception("{0} depending on {1}. Qsub {0} before submitting {1}".format(depend.step.name+'_'+depend.id,self.step.name+'_'+self.id))
+                    pbs_id = depend.pbs_id.strip()
+                depend_str = depend_str + (':' if len(depend_str)>0 else '') + pbs_id
+            command = 'qsub  -W depend=afterok:{0} {1}'.format(depend_str,os.path.expanduser(self.prep_file_name))
+            p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        else:
+            command = 'qsub {0}'.format(os.path.expanduser(self.prep_file_name))
+            p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        out, err = p.communicate()
+        self.pbs_id = out.strip()
+        self.analysis.append_submit_log(command, out, err)
+        return self.pbs_id
+
+        
+
+
+    def write_stage_fn_file(self):
+        with open(os.path.expanduser(self.stage_fn),'w') as f:
+            for fn in self.files:
+                f.write(fn+'\n')    
+
+#    def write_jobscript(self, mode='rsync',write_fn_file=True):
+#        if write_fn_file:
+#            self.write_stage_fn_file()
+#        # how should this function know where the dirs are -> check self.analysis.host !
+#        modes = ['rsync']
+#        source_dir = (self.analysis.project if self.direction == 'in' else self.scratch)
+#        target_dir = (self.scratch if self.direction == 'in' else self.analysis.project)
+#
+#        mem = '3825mb'
+#        ncpus = 1
+#        walltime = '04:00:00'
+#        if mode not in modes:
+#            raise ValueError('mode must be in {0} but is {1}'.format(modes, mode))
+#        jfn = os.path.expanduser(self.file_name)
+#        with open(os.path.expanduser(self.file_name),'w') as jf: 
+#
+#            jf.write("#!/bin/bash\n")
+#            id = self.id
+#            sn = self.step.short_name
+#            name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
+#            jf.write("#PBS -N {0}\n".format(name))
+#            jf.write("#PBS -q staging\n")
+#            jf.write("#PBS -P vervetmonkey\n")
+#            jf.write("#PBS -o {0}.o\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+#            jf.write("#PBS -e {0}.e\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+#            jf.write("#PBS -l mem={0}\n".format(mem))
+#            jf.write("#PBS -l ncpus={0}\n".format(ncpus))
+#            jf.write("#PBS -l walltime={0}\n".format(walltime))
+#            commands = ['echo start','date','date1=$(date +"%s")',
+#                        'stage_fn={0}'.format(self.stage_fn),"rsync --files-from=$stage_fn -aur {source} {target}".format(source=source_dir, target=target_dir),
+#                        'date2=$(date +"%s")',
+#                        'diff=$(($date2-$date1))',
+#                         """if [ "$diff" -lt 10 ]
+#then
+#sleep 10   
+#fi""",'echo end','date']
+#            for command in commands:
+#                jf.write(command)
+#                jf.write('\n')
+#        self.chmod_jobscript()
+#        if self.verbose:
+#            print jfn, 'written'
             
     def local_check_if_staging_needed(self):
         """
