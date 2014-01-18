@@ -135,6 +135,7 @@ if __name__ == '__main__':
     parser.add_argument("-j","--job-fname",default=None,help="Full filename of jobfile. By default it is put in ~/vervet_project/staging/...")
     parser.add_argument("-n","--job-name",default=None,help="Name of the job used in the stage-script.")
     parser.add_argument("-o","--stdout-fname",default=None,help="Full filename of out/err filenames. By default it is put in ~/vervet_project/staging/...")
+    parser.add_argument("-b","--project-base",default="vervet",type=str)
     parser.add_argument("--dry-run",action="store_true")
     parser.add_argument("-l","--local-print-file",default=None,type=str)
     parser.add_argument("-v","--verbose",type=int,default=0)
@@ -159,15 +160,17 @@ if __name__ == '__main__':
     rel_fnames=[]
     for file in args.path_or_filename:
         real_path = os.path.realpath(file)
+        rel_fn = real_path
         for bd in possible_base_dirs:
             if real_path.startswith(bd):
-                    rel_fnames.append(real_path[len(bd):])
+                    rel_fn = real_path[len(bd):]
                     break
+        rel_fnames.append(rel_fn)
     if len(rel_fnames) != len(args.path_or_filename):
         raise Exception('File number not constistent after preparation. before: {0}, after: {1}'.format(args.path_or_filename,rel_fnames))
+    print(rel_fnames)
     
     
-    
-    local_prepare_staging(rel_fnames,partner,args.direction,args.mode,run_type=args.run_type,job_fn=args.job_fname,out_fn=args.stdout_fname,verbose=args.verbose,file_to_print_to=args.local_print_file,job_name=args.job_name)
+    local_prepare_staging(rel_fnames,partner,args.direction,args.mode,run_type=args.run_type,job_fn=args.job_fname,out_fn=args.stdout_fname,verbose=args.verbose,file_to_print_to=args.local_print_file,job_name=args.job_name,project=args.project_base)
 
 

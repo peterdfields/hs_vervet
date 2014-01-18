@@ -690,7 +690,8 @@ class StageJob(Job):
             jf.write("#PBS -l mem={0}\n".format(mem))
             jf.write("#PBS -l ncpus={0}\n".format(ncpus))
             jf.write("#PBS -l walltime={0}\n".format(walltime))
-            commands = ["stage -p scratch -d out -m {mode} -p {project} -v {verbose} -l {print_to} -j {job_fn} -o {out_fn} -n {job_name} {files}".format(
+            jf.write("module load Python/2.7.3-goolf-1.4.10\n")
+            commands = ["stage -p scratch -d out -m {mode} -b {project} -v {verbose} -l {print_to} -j {job_fn} -o {out_fn} -n {job_name} {files}".format(
                 mode=self.mode,
                 project=self.analysis.dir_prefix, verbose=self.verbose, print_to=self.local_output,job_fn=self.file_name,
                 out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,files=" ".join(self.files))]            
