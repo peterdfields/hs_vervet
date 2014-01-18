@@ -1,6 +1,67 @@
 #!/usr/bin/env python
+"""
+This python module provides classes for a very basic work flow system 
+that allows to run analysis on a cluster and on local linux workstation.
+It is developped for GMI's mendel cluster with PBS scheduling, but the code can easily
+be adapted for for other clusters. 
+Contact: hannes@svardal.at
 
-import sys, os, datetime, subprocess, socket, filecmp
+Objects: 
+--------------------
+analysis
+    ---> step0
+            --> job0
+            --> job1
+            --> job2
+                ...
+    ---> step2
+            --> job0
+            --> job1
+                ...
+        ...
+-------------------
+The module provides 3 classes: Analysis, Step, Job
+Each analysis is expected to contain several steps and each step one or more jobs.
+One can think of the analysis as the workflow of an experiment that logically belongs together.
+For instance, an analyis could be variant discovery for next generation sequencing. 
+Steps are then discrete steps of this experiment. In example of variant discovery,
+steps could be: read_mapping, initial_variant_calling, local_realignment, variant_calling, filtering, ...
+Each step consists of several jobs (for instance for each individual or chromosme) and each job can have several commands.
+A job can be seen as the unit that will be submitted to the cluster (qsub) or run locally.
+
+Basic usage:
+ana = Analysis(name="test_analysis")
+first_step = Step(name="hello_world",analysis=ana)
+first_step_first_job = Job(commands=['echo Hello World'],step=first_step)
+first_step_second_job = Job(commands=['cd {}'.format(ana.ana_dir),'echo Hello world to file > testfile.txt'],step=first_step)
+first_step.run(mode='qsub')
+
+See each class docstring for more information on usage.
+Note: By default the jobs are automatically appended to the step if the step keyword argument is given.
+It is actually not necessary to assign the jobs to variables.
+
+
+
+Features:
+-- Creates a file hierarchy for the analysis on project and scratch.
+-- Automatic staging between project and scratch.
+-- Can make use of parallel execution locally.
+-- Same code can run on cluster and linux workstations.
+-- Creates jobscripts in <ana_dir>/jobscripts for easy inspection what is going on
+
+
+Note: Get newest version of this script by pulling from the repository (if you have cloned the hs_vervet_repository before): 
+cd <hs_vervet-dir> && git pull origin master
+Or from python: subprocess.Popen("cd <hs_vervet_dir> && git pull origin master".format(self.scratch),shell=True)
+
+
+Todo:
+Make it possible to merge analysis steps.
+Fix stageout to first submit a diagnostic job that then submits the real stage jobs. 
+More sophisticated staging methods for stage out.
+
+"""
+import sys, os, datetime, subprocess, socket, filecmp, shutil
 sys.path.insert(0, os.path.expanduser('~/lib/python'))
 sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
 from hs_vervet.tools import hs_vervet_basics as hvb
@@ -10,18 +71,71 @@ from hs_vervet.tools.stage import local_prepare_staging
 
 
 class Analysis(object):
-    def __init__(self, name=None,project="~/vervet_project",scratch="~/vervet_scratch"):
+    """
+    This is the top class in the hirarchy. (See also module docstring.)
+
+    Usage:
+    analysis = Analysis(name,project="~/vervet_project",scratch="~/vervet_scratch")
+
+    Where name is the name of the current analysis/experiment and project and scratch
+    are the root directiories for the project on the project- and on the scratch-
+    file-systems.
+    Instantiation creates a folder hierarchy
+    <project>/analysis/<name>/_data
+                              script
+                              jobscript
+                              log
+                              output
+                              io
+    and the same where <project> is replaced by <scratch>. The script which 
+    instantiates this class is automatically copied to the "script"-folder.
+    We recommend for analysis-naming to follow the convention name=
+    "YYYYMMSS_easily_identifiable_name".
+    
+    Important methods:
+    (see methods' docstring for more info)
+    analysis.append_step(step)
+        ... Appends a step to the analysis. Note that this is not necessary if
+            the step is instantiated with the keyword "analysis=analysis".
+            Then the step is automatically appended to the analysis.
+
+    Todo:
+    analysis.run_all()
+    analysis.join_steps()
+    
+    """
+    def __init__(self, name=None,description=None,project_dir_prefix="vervet",project_name="vervetmonkey",verbose=0):
+        callingframe = sys._getframe(1)
+        c = callingframe.f_locals["__file__"]
+        self.calling_fn = os.path.join(os.getcwdu(),
+                (c if c[:2]!='./' else c[2:]))
         self.name = name
         self.host = socket.gethostname()
-        self.scratch = scratch
-        self.project = project
+        self.scratch = os.path.join("~", project_dir_prefix + "_scratch")
+        self.project =  os.path.join("~", project_dir_prefix + "_project")
+        self.dir_prefix = project_dir_prefix
+        self.project_name = project_name 
+        self.description = description
         self.ana_dir = os.path.join('analyses/',self.name)
         self.submit_log_fn = os.path.join(self.project,self.ana_dir,'log/', self.name+"_submit_log.txt") 
-        for direc in ["_data","log","script","jobscript","io"]:
+        for direc in ["_data","log","script","jobscript","io","output"]:
             hvb.try_make_dirs(os.path.join(self.project,self.ana_dir,direc))
             hvb.try_make_dirs(os.path.join(self.scratch,self.ana_dir,direc))
         self.steps=[]
-        subprocess.Popen("cd {}/script/hs_vervet && git pull origin master".format(self.scratch),shell=True)
+        try:
+            shutil.copy(self.calling_fn,os.path.join(os.path.expanduser(self.project),
+                        self.ana_dir,"script",self.calling_fn.split("/")[-1]))
+        except shutil.Error, e:
+            if "are the same file" in str(e.message): 
+                pass
+            else:
+                raise
+        self.verbose = verbose
+        self.vprint = lambda text, min_verb=0: v_print(text,min_verb,self.verbose)
+    
+            
+            
+        #subprocess.Popen("cd {}/script/hs_vervet && git pull origin master".format(self.scratch),shell=True)
 
     def append_step(self, step):
         self.steps.append(step)
@@ -32,18 +146,22 @@ class Analysis(object):
 
     def append_submit_log(self, jobfile, out, err):
         with open(os.path.expanduser(self.submit_log_fn),'a') as lf:
-            date=datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            date = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
             lf.write(date+'\t'+jobfile+'\t'+out+'\t'+err+'\n')
     def write_and_qsub_all(self):
         for step in self.steps:
             for job in step.jobs:
                 job.write_jobscript()
                 job.qsub_jobscript()
+    def join_steps(steps=None,all=False):
+        pass
             
+    
 
-class AnalysisStep(object):
 
-    def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, depend_steps = None, stagein=True, stageout=True, default_run='qsub',  check_date_input = True, verbose = False):
+class Step(object):
+
+    def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, description=None, depend_steps=None, stagein=True, stageout=True, default_run='qsub',  check_date_input = True, verbose = None):
         # the next to lines are just for the following methods to work
         # the attributes will be set again by their constructors
         self.name = name
@@ -53,6 +171,8 @@ class AnalysisStep(object):
         self.default_run = default_run
         self.stagein_job = None
         self.stageout_job = None
+        self.description = None
+        self.verbose = verbose
         if analysis is None:
             self.analysis = analysis
         else: 
@@ -88,12 +208,15 @@ class AnalysisStep(object):
         #self.out_fname = os.path.join(self.analysis.ana_dir,'io/',self.name+'.out')    
         for job in self.jobs:
             job.analysis = analysis
+        if self.verbose is None:
+            self.verbose=analysis.verbose
+        self.vprint = lambda text, min_verb=0: v_print(text,min_verb,self.verbose)
         
     def append_job(self, job):
         #only add the job if it is not added yet
         if job not in self.jobs:
             self.jobs.append(job)
-            job.bind_to_analysis_step(self)
+            job.bind_to_step(self)
             for depend_step in self.depend_steps:
                 for depend_job in depend_step.jobs:
                     job.depends.append(depend_job)
@@ -143,7 +266,7 @@ class AnalysisStep(object):
             
         
 
-    def run(self,mode=None,print_summary=False,staging=True,parallel=False):
+    def run(self,mode=None,print_summary=False,staging=True,parallel=False,nprocs='auto'):
         modes=['qsub','scratch_run','write_jobscripts','project_run']
         if mode is None:
             mode = self.default_run
@@ -155,15 +278,15 @@ class AnalysisStep(object):
             #print "stage_job_created"
             self.prepare_staging()
         if print_summary:
-            self.print_summary()
+            self.vprint_summary()
         if mode == 'qsub':
             self.qsub()
         elif mode == 'scratch_run':
-            self.scratch_run(parallel=parallel)
+            self.scratch_run(parallel=parallel,nprocs=nprocs)
         elif mode == 'write_jobscripts':
             self.write_jobscripts()
         elif mode == 'project_run':
-            self.project_run(parallel=parallel)
+            self.project_run(parallel=parallel,nprocs=nprocs)
     
     def prepare_staging(self):
         if self.stagein: #here we could also check if stagein_job already exists
@@ -182,26 +305,32 @@ class AnalysisStep(object):
         if self.stageout_job is not None:
             self.stageout_job.stage(run_type='dry_run')
 
-    def scratch_run(self,parallel=False):
+    def scratch_run(self,parallel=False,nprocs='auto'):
         if self.stagein_job is not None:
             self.stagein_job.stage(run_type='direct')
         for job in self.jobs:
             job.commands.insert(0,'PROJECT_HOME=' + self.analysis.scratch)
             job.write_jobscript()
         if parallel:
-            hvb.parmap(lambda j: j.run_jobscript(),self.jobs)
+            if nprocs == 'auto':
+                hvb.parmap(lambda j: j.run_jobscript(),self.jobs)
+            else:
+                hvb.parmap(lambda j: j.run_jobscript(),self.jobs,nprocs=nprocs)
         else:
             for job in self.jobs:
                 job.run_jobscript()
         if self.stageout_job is not None:
             self.stageout_job.stage(run_type='direct')
 
-    def project_run(self,parallel=False):   
+    def project_run(self,parallel=False,nprocs='auto'):   
         for job in self.jobs:
             job.commands.insert(0,'PROJECT_HOME='+self.analysis.project)
             job.write_jobscript()
         if parallel:
-            hvb.parmap(lambda j: j.run_jobscript(),self.jobs)
+            if nprocs == 'auto':
+                hvb.parmap(lambda j: j.run_jobscript(),self.jobs)
+            else:
+                hvb.parmap(lambda j: j.run_jobscript(),self.jobs,nprocs=nprocs)
         else:
             for job in self.jobs:
                 job.run_jobscript()
@@ -217,8 +346,9 @@ class AnalysisStep(object):
             job.write_jobscript()
             job.qsub_jobscript()
         if self.stageout_job is not None:
-            self.stageout_job.stage(run_type='submit')
-            self.stageout_job.release()
+            self.stageout_job.write_prepare_jobscript()
+            self.stageout_job.qsub_prepare_jobscript()
+            #self.stageout_job.release()
         for job in self.jobs:
             job.release()
         if self.stagein_job is not None:
@@ -227,7 +357,7 @@ class AnalysisStep(object):
     def print_summary(self,job_summary=True):
         print "="*60
         print "analysis:", (None if self.analysis is None else self.analysis.name)
-        print "analysis_step:", ('unnamed' if self.name is None else self.name)
+        print "step:", ('unnamed' if self.name is None else self.name)
         print "stagein_job:", (None if self.stagein_job is None else self.stagein_job.name)
         if job_summary and self.stagein_job is not None:
             self.stagein_job.print_summary()
@@ -251,7 +381,7 @@ class AnalysisStep(object):
             for job in self.jobs:
                 while self.stagein_job in job.depends:
                     job.depends.remove(self.stagein_job)
-        stagein_job = StageJob(direction='in',files=in_files,analysis_step=self,stage_analysis_dir=stage_analysis_dir)
+        stagein_job = StageJob(direction='in',files=in_files,step=self,stage_analysis_dir=stage_analysis_dir)
         for job in self.jobs:
             job.depends.append(stagein_job)
         self.stagein_job = stagein_job
@@ -263,20 +393,23 @@ class AnalysisStep(object):
             for file in job.output_files:
                 out_files.append(file)
         out_files=list(set(out_files)) #only unique files
-        stageout_job = StageJob(direction='out',files=out_files,analysis_step=self,stage_analysis_dir=stage_analysis_dir,depends=[job for job in self.jobs])
+        stageout_job = StageJob(direction='out',files=out_files,step=self,stage_analysis_dir=stage_analysis_dir,depends=[job for job in self.jobs])
         self.stageout_job = stageout_job       
         
     def remove_correctly_finished_jobs(self):
         self.jobs = [job for job in self.jobs if not job.ran_noerror()]
 
 
-class JoinedStep(AnalysisStep):
+#for backwards compatability
+AnalysisStep = Step
+
+class JoinedStep(Step):
     def __init__(self):
         pass
 
  
 class Job(object):
-    def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, analysis_step=None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='08:00:00',ncpus=1, mem=None, exit_on_error=True, debug=False):
+    def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, step = None, analysis_step = None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='08:00:00',ncpus=1, mem=None, exit_on_error=True, description=None, debug=False):
         self.depends = ([] if depends is None else depends)
         self.input_files = ([] if input_files is None else input_files)
         self.output_files = ([] if output_files is None else output_files)
@@ -286,20 +419,31 @@ class Job(object):
         self.pbs_id = None
         self.returncode = None
         self.exit_on_error = exit_on_error
+        self.description = description
         if mem is None:
             self.mem = str(ncpus * 3825) + 'mb'
         else:
             self.mem = mem
         self.id = str(id)
-        if analysis_step is not None:
-            self.bind_to_analysis_step(analysis_step)
-            if self.analysis_step.analysis is not None:
+        
+
+        if step is not None:
+            self.bind_to_step(step)
+            if self.step.analysis is not None:
+                host = self.analysis.host
+            else:
+                host = socket.gethostname()
+        #for backwards comatability
+        #analysis_step is depriciated, use step
+        elif analysis_step is not None:
+            self.bind_to_step(analysis_step)
+            if self.step.analysis is not None:
                 host = self.analysis.host
             else:
                 host = socket.gethostname()
         else:
             self.name = None
-            self.analysis_step = None
+            self.step = None
             self.file_name = None
             host = socket.gethostname()
         cluster_commands = ([] if cluster_commands is None else cluster_commands)
@@ -308,14 +452,14 @@ class Job(object):
         cluster_modules = ([] if cluster_modules is None else cluster_modules)
         local_modules = ([] if local_modules is None else local_modules)
         self.modules = ([] if modules is None else modules) + (local_modules if 'lws12' in host else cluster_modules)
-        if self.analysis_step is not None and append_to_ana:
-            self.analysis_step.append_job(self)
+        if self.step is not None and append_to_ana:
+            self.step.append_job(self)
 
-    def bind_to_analysis_step(self,analysis_step):
-        self.analysis_step = analysis_step
-        self.analysis = analysis_step.analysis
+    def bind_to_step(self,step):
+        self.step = step
+        self.analysis = step.analysis
         id = self.id
-        self.name = str(analysis_step.name) + ('_' if len(id)>0 else '') + id
+        self.name = str(step.name) + ('_' if len(id)>0 else '') + id
         self.file_name = os.path.join(self.analysis.project,self.analysis.ana_dir,"jobscript/",self.name+".sh")   
         self.oe_fn=os.path.join(self.analysis.ana_dir,"log/",self.name)
         if self.debug:
@@ -330,8 +474,8 @@ class Job(object):
         self.commands += job.commands
         self.input_files += job.input_files
         self.output_files += job.output_files
-        if self.analysis_step is not None:
-            self.analysis_step.jobs.remove(job)
+        if self.step is not None:
+            self.step.jobs.remove(job)
 
     
     def ran_noerror(self):
@@ -359,7 +503,7 @@ class Job(object):
 
         with open(os.path.expanduser(self.file_name), "w") as jf:
             jf.write("#!/bin/bash\n")
-            sn = self.analysis_step.short_name
+            sn = self.step.short_name
             name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
             #print 'name:',name
             jf.write("#PBS -N {}\n".format(name))
@@ -390,8 +534,10 @@ class Job(object):
         self.chmod_jobscript()
         #return jfn
     
-    def chmod_jobscript(self):
-        p = subprocess.call(['chmod','ug+x',os.path.expanduser(self.file_name)])
+    def chmod_jobscript(self,file='auto'):
+        if file=='auto':
+            file = self.file_name
+        p = subprocess.call(['chmod','ug+x',os.path.expanduser(file)])
         #out, err = p.communicate()
         
 
@@ -403,7 +549,7 @@ class Job(object):
                     pbs_id = depend.strip()
                 else:
                     if depend.pbs_id == None:
-                        raise Exception("{0} depending on {1}. Qsub {0} before submitting {1}".format(depend.analysis_step.name+'_'+depend.id,self.analysis_step.name+'_'+self.id))
+                        raise Exception("{0} depending on {1}. Qsub {0} before submitting {1}".format(depend.step.name+'_'+depend.id,self.step.name+'_'+self.id))
                     pbs_id = depend.pbs_id.strip()     
                 depend_str = depend_str + (':' if len(depend_str)>0 else '') + pbs_id 
             command = 'qsub -h  -W depend=afterok:{0} {1}'.format(depend_str,os.path.expanduser(self.file_name))
@@ -449,7 +595,7 @@ class Job(object):
         
 
 class StageJob(Job):
-    def __init__(self,  direction, files=None, analysis_step=None, stage_analysis_dir=True, mode='newer',depends=None,  verbose=False, debug=False):
+    def __init__(self,  direction, files=None, step=None, stage_analysis_dir=True, mode='newer',depends=None,  verbose=None, debug=False):
         if direction not in ['in','out']:
             raise ValueError('direction should be "in" or "out" but is {}'.format(direction))
         self.direction = direction
@@ -458,31 +604,38 @@ class StageJob(Job):
         self.debug = debug
         self.stage_analysis_dir = stage_analysis_dir
         self.mode = mode
-        if analysis_step is not None:
-            self.bind_to_analysis_step(analysis_step)
+        self.verbose = verbose
+        if step is not None:
+            self.bind_to_step(step)
         else:
             self.name = None
-            self.analysis_step = None    
+            self.step = None    
             self.file_name = None
             self.id = None
             self.stage_fn = None
-        self.verbose = verbose
         self.input_files = None
         self.output_files = None    
         
-    def bind_to_analysis_step(self,analysis_step):
-        if analysis_step.analysis.host == 'gmi-lws12':
+    def bind_to_step(self,step):
+        if step.analysis.host == 'gmi-lws12':
             hid = 'lws12'
-        elif 'login' in  analysis_step.analysis.host or 'dmn' in analysis_step.analysis.host:
+        elif 'login' in  step.analysis.host or 'dmn' in step.analysis.host:
             hid = 'mendel'
         self.id = 'stage' + self.direction + '_'  + hid
-        self.stage_fn = os.path.join(analysis_step.analysis.project,analysis_step.analysis.ana_dir,'io/',analysis_step.name+'.'+self.direction)
-        Job.bind_to_analysis_step(self,analysis_step)
+        self.stage_fn = os.path.join(step.analysis.project,step.analysis.ana_dir,'io/',step.name+'.'+self.direction)
+        Job.bind_to_step(self,step)
         self.scratch = ('~/vervet_lab' if hid == 'lws12' else '~/vervet_scratch')
         if self.stage_analysis_dir:
-            self.files.insert(0,'analyses/'+analysis_step.analysis.name+'/')
+            self.files.insert(0,'analyses/'+step.analysis.name+'/')
+        if self.verbose is None:
+            self.verbose = step.verbose
+        self.vprint = lambda text, min_verb=0: v_print(text,min_verb,self.verbose)
+        #choose appropriate name and use this, attention with different file systems...
+        #-> different files for local and remote ...
+        #print self.oe_fn
+        #print self.analysis.project
+        self.local_output = os.path.join(self.analysis.project, self.oe_fn+'_local.o')
 
-    
     def stage(self,run_type='auto'):
         # todo: incorporate depends!
         if self.analysis.host == 'gmi-lws12':
@@ -490,25 +643,88 @@ class StageJob(Job):
         else:
             partner = 'scratch'
         id = self.id
-        sn = self.analysis_step.short_name
+        sn = self.step.short_name
         name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
         if run_type=='dry_run' or run_type=='direct':
             depends = None
         else:
             depends = [job.pbs_id.strip() for job in self.depends]
-        
-        (out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,afterok=depends,startonhold=True,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,verbose=False)
+        #print self.local_output
+        (out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,afterok=depends,startonhold=True,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,project=self.analysis.dir_prefix,verbose=self.verbose,file_to_print_to=self.local_output)
         #if out is not None and out:
         #    print >>sys.stdout, 'stage.local_prepare_staging','out:',out 
         #if err is not None:
         #    print >>sys.stderr, 'stage.local_prepare_staging','err:',err
         self.returncode = rc
+        #print "ana_stage, out",out
+        #print "ana_stage,err", err
         if run_type == 'submit':
-            print 'that will be the pbs_id', out
-            print self.name
+            #print self.name,'submitted with pbs_id', out
+            #print self.name
             self.pbs_id = out.strip()
-    
+        
+    #the following two functions are only used by the stage-out job
+    #this is basically a dummy job that tests first how much files really need to be staged and
+    #then submits or directly runs a job accordingly
+    def write_prepare_jobscript(self):
+        mem = '3825mb'
+        ncpus = 1
+        walltime = '00:20:00'
+        id = self.id
+        sn = self.step.short_name
+        name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
+#        if mode not in modes:
+#            raise ValueError('mode must be in {0} but is {1}'.format(modes, mode))
+#        jfn = os.path.expanduser(self.file_name)
+        fn = os.path.splitext(self.file_name)[0] + "_prep" + os.path.splitext(self.file_name)[1]
+        with open(os.path.expanduser(fn),'w') as jf: 
+            jf.write("#!/bin/bash\n")
+            id = self.id
+            sn = self.step.short_name
+            name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
+            jf.write("#PBS -N {0}\n".format(name))
+            jf.write("#PBS -q staging\n")
+            jf.write("#PBS -P vervetmonkey\n")
+            jf.write("#PBS -o {0}_prep.o\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+            jf.write("#PBS -e {0}_prep.e\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+            jf.write("#PBS -l mem={0}\n".format(mem))
+            jf.write("#PBS -l ncpus={0}\n".format(ncpus))
+            jf.write("#PBS -l walltime={0}\n".format(walltime))
+            commands = ["stage -p scratch -d out -m {mode} -p {project} -v {verbose} -l {print_to} -j {job_fn} -o {out_fn} -n {job_name} {files}".format(
+                mode=self.mode,
+                project=self.analysis.dir_prefix, verbose=self.verbose, print_to=self.local_output,job_fn=self.file_name,
+                out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,files=" ".join(self.files))]            
+            for command in commands:
+                jf.write(command)
+                jf.write('\n')
+        #implement the following...
+        self.chmod_jobscript(fn)
+        self.prep_file_name = fn
+        return fn
 
+        
+    def qsub_prepare_jobscript(self):
+        depend_str=''
+        if self.depends:
+            for depend in self.depends:
+                if type(depend) == str:
+                    pbs_id = depend.strip()
+                else:
+                    if depend.pbs_id == None:
+                        raise Exception("{0} depending on {1}. Qsub {0} before submitting {1}".format(depend.step.name+'_'+depend.id,self.step.name+'_'+self.id))
+                    pbs_id = depend.pbs_id.strip()
+                depend_str = depend_str + (':' if len(depend_str)>0 else '') + pbs_id
+            command = 'qsub  -W depend=afterok:{0} {1}'.format(depend_str,os.path.expanduser(self.prep_file_name))
+            p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        else:
+            command = 'qsub {0}'.format(os.path.expanduser(self.prep_file_name))
+            p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        out, err = p.communicate()
+        self.pbs_id = out.strip()
+        self.analysis.append_submit_log(command, out, err)
+        return self.pbs_id
+
+        
 
 
     def write_stage_fn_file(self):
@@ -516,48 +732,48 @@ class StageJob(Job):
             for fn in self.files:
                 f.write(fn+'\n')    
 
-    def write_jobscript(self, mode='rsync',write_fn_file=True):
-        if write_fn_file:
-            self.write_stage_fn_file()
-        # how should this function know where the dirs are -> check self.analysis.host !
-        modes = ['rsync']
-        source_dir = (self.analysis.project if self.direction == 'in' else self.scratch)
-        target_dir = (self.scratch if self.direction == 'in' else self.analysis.project)
-
-        mem = '3825mb'
-        ncpus = 1
-        walltime = '04:00:00'
-        if mode not in modes:
-            raise ValueError('mode must be in {0} but is {1}'.format(modes, mode))
-        jfn = os.path.expanduser(self.file_name)
-        with open(os.path.expanduser(self.file_name),'w') as jf: 
-
-            jf.write("#!/bin/bash\n")
-            id = self.id
-            sn = self.analysis_step.short_name
-            name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
-            jf.write("#PBS -N {0}\n".format(name))
-            jf.write("#PBS -q staging\n")
-            jf.write("#PBS -P vervetmonkey\n")
-            jf.write("#PBS -o {0}.o\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
-            jf.write("#PBS -e {0}.e\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
-            jf.write("#PBS -l mem={0}\n".format(mem))
-            jf.write("#PBS -l ncpus={0}\n".format(ncpus))
-            jf.write("#PBS -l walltime={0}\n".format(walltime))
-            commands = ['echo start','date','date1=$(date +"%s")',
-                        'stage_fn={0}'.format(self.stage_fn),"rsync --files-from=$stage_fn -aur {source} {target}".format(source=source_dir, target=target_dir),
-                        'date2=$(date +"%s")',
-                        'diff=$(($date2-$date1))',
-                         """if [ "$diff" -lt 10 ]
-then
-sleep 10   
-fi""",'echo end','date']
-            for command in commands:
-                jf.write(command)
-                jf.write('\n')
-        self.chmod_jobscript()
-        if self.verbose:
-            print jfn, 'written'
+#    def write_jobscript(self, mode='rsync',write_fn_file=True):
+#        if write_fn_file:
+#            self.write_stage_fn_file()
+#        # how should this function know where the dirs are -> check self.analysis.host !
+#        modes = ['rsync']
+#        source_dir = (self.analysis.project if self.direction == 'in' else self.scratch)
+#        target_dir = (self.scratch if self.direction == 'in' else self.analysis.project)
+#
+#        mem = '3825mb'
+#        ncpus = 1
+#        walltime = '04:00:00'
+#        if mode not in modes:
+#            raise ValueError('mode must be in {0} but is {1}'.format(modes, mode))
+#        jfn = os.path.expanduser(self.file_name)
+#        with open(os.path.expanduser(self.file_name),'w') as jf: 
+#
+#            jf.write("#!/bin/bash\n")
+#            id = self.id
+#            sn = self.step.short_name
+#            name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
+#            jf.write("#PBS -N {0}\n".format(name))
+#            jf.write("#PBS -q staging\n")
+#            jf.write("#PBS -P vervetmonkey\n")
+#            jf.write("#PBS -o {0}.o\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+#            jf.write("#PBS -e {0}.e\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+#            jf.write("#PBS -l mem={0}\n".format(mem))
+#            jf.write("#PBS -l ncpus={0}\n".format(ncpus))
+#            jf.write("#PBS -l walltime={0}\n".format(walltime))
+#            commands = ['echo start','date','date1=$(date +"%s")',
+#                        'stage_fn={0}'.format(self.stage_fn),"rsync --files-from=$stage_fn -aur {source} {target}".format(source=source_dir, target=target_dir),
+#                        'date2=$(date +"%s")',
+#                        'diff=$(($date2-$date1))',
+#                         """if [ "$diff" -lt 10 ]
+#then
+#sleep 10   
+#fi""",'echo end','date']
+#            for command in commands:
+#                jf.write(command)
+#                jf.write('\n')
+#        self.chmod_jobscript()
+#        if self.verbose:
+#            print jfn, 'written'
             
     def local_check_if_staging_needed(self):
         """
@@ -577,6 +793,11 @@ fi""",'echo end','date']
         else:
             command = '{}'.format(self.file_name)
         self.execute(command)
+
+class Command(object):
+    def __init__(self,command,description):
+        self.command = command
+        self.description = description
                    
                     
                       

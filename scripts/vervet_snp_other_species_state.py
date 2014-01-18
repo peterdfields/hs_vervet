@@ -5,6 +5,9 @@ of vervet reference against macaque reference.
 """
 
 import os,sys
+
+sys.path.insert(0, os.path.expanduser('~/lib/python'))
+sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
 import numpy as np
 #needs pandas version >=0.12 to support regex replace
 import pandas as pd
@@ -154,8 +157,6 @@ def get_ancestral(align_fname,snp_df,window_sz=10000,chromosome_length=False,ver
     return ancestral
 
 if __name__ == '__main__':
-    sys.path.insert(0, os.path.expanduser('~/lib/python'))
-    sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
     #from hs_vervet.tools import hs_vervet_basics as hvb
     #from hs_vervet.tools import stats_on_data as sod
     import vcf

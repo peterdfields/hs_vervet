@@ -5,6 +5,7 @@ used by several of hs' vervet tools.
 I purged all content on 20130903 to get rid of redundent functions.
 If something is missing here, copy it from hs_vervet_basics_old.py.
 """
+from __future__ import print_function
 import os,gzip,re
 import numpy as np
 
@@ -36,6 +37,25 @@ def try_make_dirs(direc):
             pass
             #print 'exists:', direc
         else: raise
+
+def v_print(text,min_verbosity=0,verbosity=0,file=None,append=True):
+    """
+    verbose printing with different verbosity levels
+    """
+    file = os.path.expanduser(file)   
+    if verbosity >= min_verbosity:
+        if file is None:
+            print(text)
+        else:
+            try:
+                print(text,file=file)
+            except AttributeError:
+                if append:
+                    print(text,file=open(file,'a'))
+                else:
+                    print(text,file=open(file,'w'))
+                    
+    
 
 #-----------
 # tsv I/0
