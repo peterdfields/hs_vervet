@@ -156,10 +156,12 @@ if __name__ == '__main__':
     
     possible_base_dirs = ['/projects/vervetmonkey/','/lustre/scratch/projects/vervetmonkey/','/net/gmi.oeaw.ac.at/nordborg/lab/Projects/vervetpopgen/']
     
+    #print('input fn:',args.path_or_filename)
     #get filenames relative to project dir
     rel_fnames=[]
     for file in args.path_or_filename:
         real_path = os.path.realpath(file)
+        print(real_path)
         rel_fn = real_path
         for bd in possible_base_dirs:
             if real_path.startswith(bd):
@@ -168,9 +170,12 @@ if __name__ == '__main__':
         rel_fnames.append(rel_fn)
     if len(rel_fnames) != len(args.path_or_filename):
         raise Exception('File number not constistent after preparation. before: {0}, after: {1}'.format(args.path_or_filename,rel_fnames))
-    print(rel_fnames)
+    #print('===========STAGE================')
+    #print('rel_fnames:',rel_fnames)
+    #sys.exit(0)
     
-    
+
+
     local_prepare_staging(rel_fnames,partner,args.direction,args.mode,run_type=args.run_type,job_fn=args.job_fname,out_fn=args.stdout_fname,verbose=args.verbose,file_to_print_to=args.local_print_file,job_name=args.job_name,project=args.project_base)
 
 

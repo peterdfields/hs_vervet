@@ -16,7 +16,7 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
         v_print("",file=file_to_print_to,append=False)
     #prints to stdout if file_to_print_to is None
     vprint = lambda text,min_verb: v_print(text,min_verb,verbose,file_to_print_to)
-    vprint("something printed in the stage function in dmn_stage.py",0)
+    #vprint("something printed in the stage function in dmn_stage.py",0)
 
 
     #verboseprint = print if verbose else lambda *a, **k: None
@@ -51,8 +51,10 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
         file_ls = nonexist_file_ls
     
     #print('before:',file_ls)    
+    vprint("staging form '" +source_base+"' to '" + target_base + "'" )
     vprint("staging mode: "+mode,1)
     vprint("run type: "+run_type,1)
+    n_files = 0
     if mode == "newer" and (run_type == 'direct' or run_type == 'auto'):
         #remove files from file-list that are newer on target than on source
         def add_if_newer(file,file_ls):
@@ -76,10 +78,12 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
                     #print('fs:',fs)
                     for f in fs:
                         #print('f:',f)
+                        n_files+=1
                         add_if_newer(os.path.join(root[len(source_base)+1:],f),newer_on_source)
             else:
+                n_files += 1
                 add_if_newer(file,newer_on_source)
-        vprint("Staging" + str(len(newer_on_source)) + " out of " + str(len(file_ls)) + " files." ,1)
+        vprint("Staging" + str(len(newer_on_source)) + " out of " + n_files + " files." ,1)
         file_ls = newer_on_source
     
     #print('after',file_ls)    
@@ -272,7 +276,7 @@ if __name__ == '__main__':
     parser.add_argument("path_or_filename",help="Path or filename to stage.", nargs="+")
     
     args = parser.parse_args()
-    #add verbose...
+
     (out, err, rc) = stage(args.path_or_filename,args.source_base,args.target_base,args.mode,run_type=args.run_type,afterok=args.afterok,afterany=args.afterany,startonhold=args.start_on_hold,job_fn=args.job_fname,out_fn=args.stdout_fname,name=args.job_name,file_to_print_to=args.local_print_file,verbose=args.verbose)
 
     

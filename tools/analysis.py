@@ -695,6 +695,17 @@ class StageJob(Job):
                 mode=self.mode,
                 project=self.analysis.dir_prefix, verbose=self.verbose, print_to=self.local_output,job_fn=self.file_name,
                 out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,files=" ".join(self.files))]            
+            stage_command = "dmn_stage.py -m {mode} -t auto -v {verbose} -j {job_fn} -o {oe_fn} -n {job_name} -l {print_to} {scratch} {project} {files}".format(
+                    mode=self.mode,verbose=self.verbose,job_fn=self.file_name,
+                    oe_fn=os.path.join(self.analysis.project,self.oe_fn),
+                    job_name=name,print_to=self.local_output+".dmn0",
+                    scratch=self.analysis.scratch,project=self.analysis.project,
+                    files=" ".join(self.files))
+            commands = ["if [[ `hostname -s` = dmn* ]]; then",
+                        stage_command,
+                        "else",
+                        "ssh dmn.mendel.gmi.oeaw.ac.at nohup {}".format(stage_command),
+                        "fi"]
             for command in commands:
                 jf.write(command)
                 jf.write('\n')
