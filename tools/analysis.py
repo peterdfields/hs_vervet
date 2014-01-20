@@ -474,7 +474,7 @@ class Job(BaseClass):
         id = self.id
         self.name = str(step.name) + ('_' if len(id)>0 else '') + id
         self.file_name = os.path.join(self.analysis.project,self.analysis.ana_dir,"jobscript/",self.name+".sh")   
-        self.oe_fn=os.path.join(self.analysis.ana_dir,"log/",self.name)
+        self.oe_fn=os.path.join(self.analysis.project,self.analysis.ana_dir,"log/",self.name)
         if self.verbose is None:
             self.verbose = step.verbose
         if self.debug:
@@ -494,7 +494,7 @@ class Job(BaseClass):
 
     
     def ran_noerror(self):
-        f = os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn+'.e')
+        f = os.path.expanduser(self.oe_fn+'.e')
         if os.path.isfile(f) and os.path.getsize(f) == 0:
             ran_noerror = True
         else:
@@ -529,8 +529,8 @@ class Job(BaseClass):
                 jf.write("#PBS -l mem={}\n".format(mem))
                 jf.write("#PBS -l ncpus={}\n".format(ncpus))
                 jf.write("#PBS -l walltime={}\n".format(walltime))
-            jf.write("#PBS -o {}.o\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
-            jf.write("#PBS -e {}.e\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+            jf.write("#PBS -o {}.o\n".format(os.path.expanduser(self.oe_fn)))
+            jf.write("#PBS -e {}.e\n".format(os.path.expanduser(self.oe_fn)))
 
             if self.exit_on_error:
                 jf.write("set -e\n")
@@ -599,7 +599,7 @@ class Job(BaseClass):
         out, err = p.communicate()
         self.returncode = p.returncode
         for name, content in zip(['o','e'],[out,err]): 
-            with open(os.path.expanduser(os.path.join(self.analysis.scratch,self.oe_fn+'.'+name)),'w') as oef:
+            with open(os.path.expanduser(self.oe_fn+'.'+name),'w') as oef:
                 oef.write(content)
         
 
@@ -651,11 +651,9 @@ class StageJob(Job):
             self.verbose = step.verbose
         #choose appropriate name and use this, attention with different file systems...
         #-> different files for local and remote ...
-        #print self.oe_fn
-        #print self.analysis.project
-        self.local_output = os.path.join(self.analysis.project, self.oe_fn+'_local.o')
 
-    def stage(self,run_type='auto'):
+    def stage(self,run_type='auto',wait=False):
+
         if self.analysis.host == 'gmi-lws12':
             partner = 'lab'
         else:
@@ -669,13 +667,27 @@ class StageJob(Job):
             depends = [job.pbs_id.strip() for job in self.depends]
 
         self.vprint("staging",self.name,"in mode",run_type)
-
-        (out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,afterok=depends,startonhold=True,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,project=self.analysis.dir_prefix,verbose=self.verbose,file_to_print_to=self.local_output)
+        
+        stage_command = self.stage_command(run_type,start_on_hold=True)
+        if "dmn" not in self.analysis.host:
+            stage_command.insert(0,"ssh dmn.mendel.gmi.oeaw.ac.at nohup ")
+        
+        p = subprocess.Popen(stage_command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        
+        out, err = p.communicate()
+        self.returncode = p.returncode
+        
+        if wait:
+            #naive check whether a job was submitted
+            if login in out:
+                import poll_pbs
+                self.returncode = poll_pbs.wait_for_job(out.strip())
+        #(out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,afterok=depends,startonhold=True,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,project=self.analysis.dir_prefix,verbose=self.verbose,file_to_print_to=self.local_output)
         #if out is not None and out:
         #    print >>sys.stdout, 'stage.local_prepare_staging','out:',out 
         #if err is not None:
         #    print >>sys.stderr, 'stage.local_prepare_staging','err:',err
-        self.returncode = rc
+        #self.returncode = rc
         #print "ana_stage, out",out
         #print "ana_stage,err", err
         #self.vprint(self.name +' ' + run_type + 'out=', out)
@@ -685,6 +697,27 @@ class StageJob(Job):
             self.pbs_id = out.strip()
             self.vprint("submitted",self.name,"with job ID",self.pbs_id,mv=1)
         
+    def stage_command(self,run_type='auto',startonhold=False):
+        #todo: implement a separate staging out that happens in any case, even if the jobs failed...
+        run_types =  ['direct','submit','auto','dry_run']
+        if run_type not in run_types:
+            raise ValueError("run_type should be in {} but is {}".format(run_types,run_type))        
+        if startonhold:
+            hold = "-H "
+        else:
+            hold = ""
+        stage_command = "dmn_stage.py -m {mode} -t {run_type} -v {verbose} -j {job_fn} -o {oe_fn}" \
+                        " -n {job_name} -l {print_to} {hold}{scratch} {project} {files}".format(
+                        mode=self.mode,run_type=run_type,verbose=self.verbose,job_fn=self.file_name,
+                        oe_fn=os.path.join(self.analysis.project,self.oe_fn),
+                        job_name=name,print_to=self.oe_fn+"prep_dmn.o", hold=hold,
+                        scratch=self.analysis.scratch,project=self.analysis.project,
+                        files=" ".join(self.files))
+
+        return stage_command
+        
+
+
     #the following two functions are only used by the stage-out job
     #this is basically a dummy job that tests first how much files really need to be staged and
     #then submits or directly runs a job accordingly
@@ -709,8 +742,8 @@ class StageJob(Job):
             jf.write("#PBS -N {0}\n".format(name))
             jf.write("#PBS -q staging\n")
             jf.write("#PBS -P vervetmonkey\n")
-            jf.write("#PBS -o {0}_prep.o\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
-            jf.write("#PBS -e {0}_prep.e\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+            jf.write("#PBS -o {0}_prep_job.o\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+            jf.write("#PBS -e {0}_prep_job.e\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
             jf.write("#PBS -l mem={0}\n".format(mem))
             jf.write("#PBS -l ncpus={0}\n".format(ncpus))
             jf.write("#PBS -l walltime={0}\n".format(walltime))
