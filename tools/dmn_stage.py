@@ -15,7 +15,14 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
     if file_to_print_to is not None:
         v_print("",file=file_to_print_to,append=False)
     #prints to stdout if file_to_print_to is None
-    vprint = lambda text,min_verb: v_print(text,min_verb,verbose,file_to_print_to)
+    def vprint(*text,**kwa):
+        """
+        use similar to python3 print function
+        additional argument mv or min_verbosity
+        and append (to know whether append to file or not)
+        """
+        kwa.update({"file":file_to_print_to,"verbosity":verbose})
+        v_print(*text,**kwa)
     #vprint("something printed in the stage function in dmn_stage.py",0)
 
 
@@ -51,9 +58,9 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
         file_ls = nonexist_file_ls
     
     #print('before:',file_ls)    
-    vprint("staging form '" +source_base+"' to '" + target_base + "'" )
-    vprint("staging mode: "+mode,1)
-    vprint("run type: "+run_type,1)
+    vprint("staging form '" +source_base+"' to '" + target_base + "'",mv=1)
+    vprint("staging mode: "+mode,mv=1)
+    vprint("run type: "+run_type,mv=1)
     n_files = 0
     if mode == "newer" and (run_type == 'direct' or run_type == 'auto'):
         #remove files from file-list that are newer on target than on source
@@ -63,12 +70,12 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
                 target_time = os.path.getmtime(os.path.join(target_base,file))
                 if source_time > target_time:
                     file_ls.append(file)
-                    vprint("Staging, source newer:"+file,1)
+                    vprint("Staging, source newer:"+file,mv=1)
                 else:
-                    vprint("Not staging, not newer on source: "+file,1)
+                    vprint("Not staging, not newer on source: "+file,mv=1)
             except OSError:
                 file_ls.append(file)
-                vprint("Staging, not exist on target:"+file,1)
+                vprint("Staging, not exist on target:"+file,mv=1)
         newer_on_source = []
         for file in file_ls:
             #print('from filelist:',file)
@@ -83,13 +90,13 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
             else:
                 n_files += 1
                 add_if_newer(file,newer_on_source)
-        vprint("Staging" + str(len(newer_on_source)) + " out of " + n_files + " files." ,1)
+        vprint("Staging" + str(len(newer_on_source)) + " out of " + str(n_files) + " files." ,mv=1)
         file_ls = newer_on_source
     
     #print('after',file_ls)    
 
     if not file_ls:
-        print("Nothing to stage in mode {0}".format(mode))
+        vprint("Nothing to stage in mode {0}".format(mode))
         return (None, None, 0)
         
 
@@ -98,8 +105,7 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
         try:
             sizes.append(os.path.getsize(os.path.join(source_base,file)))
         except OSError, e:
-            if verbose:
-                warnings.warn("Can't check size of file. Does not exist. Copy operation might not be optimised. "+str(e),UserWarning)
+            vprint(warnings.warn("Can't check size of file. Does not exist. Copy operation might not be optimised. "+str(e),UserWarning),mv=1)
             
             
     sizes=np.array(sizes)
@@ -111,14 +117,14 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
     
     #implement a check for many small files (using number and median) and zip if necessary
     
-    vprint("Total file size is " + str(total),1)  
+    vprint("Total file size is " + str(total) + " bytes.",mv=1)  
 
     if total <= min_mcp_size:
         method = 'cp'
-        vprint("using cp",1)
+        vprint("using cp",mv=1)
     else:
         method = 'mcp'
-        vprint("using mcp",1)
+        vprint("using mcp",mv=1)
     
     job_fn = write_jobscript(file_ls,source_base,target_base,mode,method,job_fn=job_fn,out_fn=out_fn,name=name,verbose=verbose)
 
@@ -168,6 +174,9 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
     #        print(job_fn,'out:',out,file=sys.stdout)
     #    if err is not None:    
     #        print(job_fn,'err:',err,file=sys.stderr)
+    
+    vprint('submitted stage job out: ' + out,mv=1)
+    vprint('submitted stage job err: ' + err,mv=1)
 
     return (out, err, rc)
 

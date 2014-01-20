@@ -38,11 +38,10 @@ def try_make_dirs(direc):
             #print 'exists:', direc
         else: raise
 
+
+"""
 def v_print(text,min_verbosity=0,verbosity=0,file=None,append=True):
-    """
-    verbose printing with different verbosity levels
-    """
-    file = os.path.expanduser(file)   
+    
     if verbosity >= min_verbosity:
         if file is None:
             print(text)
@@ -54,7 +53,53 @@ def v_print(text,min_verbosity=0,verbosity=0,file=None,append=True):
                     print(text,file=open(file,'a'))
                 else:
                     print(text,file=open(file,'w'))
-                    
+"""                    
+
+def v_print(*text,**kwa):
+    """
+    verbose printing with different verbosity levels
+    """
+    try:
+        min_verbosity = kwa["min_verbosity"]
+        del kwa["min_verbosity"]
+    except KeyError:
+        if "mv" in kwa.keys():
+            min_verbosity = kwa["mv"]
+            del kwa["mv"]
+        else:
+            min_verbosity = 0
+    try:
+        verbosity = kwa["verbosity"]
+        del kwa["verbosity"]
+    except KeyError:
+        verbosity = 0
+    try:
+        file = kwa["file"]
+        del kwa["file"]
+    except KeyError:
+        file = None
+    try:
+        append = kwa["append"]
+        del kwa["append"]
+    except KeyError:
+        append = True
+
+    if verbosity >= min_verbosity:
+        if file is None:
+            print(*text,**kwa)
+        else:
+            try:
+                print(*text,file=file,**kwa)
+            except AttributeError:
+                file = os.path.expanduser(file)
+                if append:
+                    print(*text,file=open(file,'a'),**kwa)
+                else:
+                    print(*text,file=open(file,'w'),**kwa)
+
+    
+
+
     
 
 #-----------

@@ -17,10 +17,17 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
     #empty the file to print to (usually things are appended
     if file_to_print_to is not None:
         v_print("",file=file_to_print_to,append=False)
-    #prints to stdout if file_to_print_to is None
-    vprint = lambda text,min_verb: v_print(text,min_verb,verbose,file_to_print_to)   
+        #prints to stdout if file_to_print_to is None
+    def vprint(*text,**kwa):
+        """
+        use similar to python3 print function
+        additional argument mv or min_verbosity
+        and append (to know whether append to file or not)
+        """
+        kwa.update({"file":file_to_print_to,"verbosity":verbose})
+        v_print(*text,**kwa)   
 
-    vprint(datetime.datetime.now().strftime("%Y%m%d-%H%M%S")+" - running local_prepare_staging in stage.py",1)
+    vprint(datetime.datetime.now().strftime("%Y%m%d-%H%M%S")+" - running local_prepare_staging in stage.py",mv=1)
     
     if afterany is None:
         afterany = []
@@ -68,7 +75,7 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
         file_ls = nonexist_file_ls
     
     if not file_ls:
-        print("Nothing to stage in mode {0}".format(mode))
+        vprint("Nothing to stage in mode {0}".format(mode),mv=0)
         return (None, None,0)
 
 
@@ -97,23 +104,25 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
     #print(command)
 
     if 'dmn' in host:
-        vprint('command:',1)
+        vprint('command:',mv=1)
         p = subprocess.Popen(command, shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     else:
-        vprint('command submitted to dmn via ssh dmn.mendel.gmi.oeaw.ac.at nohup <command>:',1)
+        vprint('command submitted to dmn via ssh dmn.mendel.gmi.oeaw.ac.at nohup <command>:',mv=1)
         p = subprocess.Popen("ssh dmn.mendel.gmi.oeaw.ac.at nohup {0}".format(command), shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     out, err = p.communicate()
     rc = p.returncode        
     
     
-    vprint(command,1)
+    vprint(command,mv=1)
 
-    if run_type != 'submit':
-        if out is not None:
-            print('dmn_stage.py','out:',out, file=sys.stdout)
-        if err is not None:    
-            print('dmn_stage.py','err:',err, file=sys.stderr)
+   #if run_type != 'submit':
+   #     if out is not None:
+   #         print('dmn_stage.py','out:',out, file=sys.stdout)
+   #     if err is not None:    
+   #         print('dmn_stage.py','err:',err, file=sys.stderr)
 
+    vprint('dmn_stage.py out: ' + out,mv=1)
+    vprint('dmn_stage.py err: ' + err,mv=1)
     return out, err, rc            
        
 

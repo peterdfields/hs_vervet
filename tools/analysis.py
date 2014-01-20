@@ -68,9 +68,20 @@ from hs_vervet.tools import hs_vervet_basics as hvb
 from hs_vervet.tools.stage import local_prepare_staging
 
 
+class BaseClass(object):
+
+    def vprint(self,*text,**kwa):
+        """
+        use similar to python3 print function
+        additional argument mv or min_verbosity
+        and append (to know whether append to file or not)
+        """
+        kwa.update({"verbosity":self.verbose})
+        hvb.v_print(*text,**kwa)
 
 
-class Analysis(object):
+
+class Analysis(BaseClass):
     """
     This is the top class in the hirarchy. (See also module docstring.)
 
@@ -131,13 +142,13 @@ class Analysis(object):
             else:
                 raise
         self.verbose = verbose
-        self.vprint = lambda text, min_verb=0: v_print(text,min_verb,self.verbose)
     
             
             
         #subprocess.Popen("cd {}/script/hs_vervet && git pull origin master".format(self.scratch),shell=True)
 
     def append_step(self, step):
+        self.vprint("appending step",step.name,"to analysis",self.name,mv=1)
         self.steps.append(step)
         step.bind_to_analysis(self)
         
@@ -159,7 +170,7 @@ class Analysis(object):
     
 
 
-class Step(object):
+class Step(BaseClass):
 
     def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, description=None, depend_steps=None, stagein=True, stageout=True, default_run='qsub',  check_date_input = True, verbose = None):
         # the next to lines are just for the following methods to work
@@ -210,7 +221,6 @@ class Step(object):
             job.analysis = analysis
         if self.verbose is None:
             self.verbose=analysis.verbose
-        self.vprint = lambda text, min_verb=0: v_print(text,min_verb,self.verbose)
         
     def append_job(self, job):
         #only add the job if it is not added yet
@@ -371,6 +381,7 @@ class Step(object):
         print "="*60
 
     def add_stagein(self, stage_analysis_dir=True):
+        self.vprint("adding stagein job to",self.name,mv=1)
         in_files = []
         for job in self.jobs:
             for file in job.input_files:
@@ -388,6 +399,7 @@ class Step(object):
   
 
     def add_stageout(self, stage_analysis_dir=True, add_to_jobs=False):
+        self.vprint("addint stageout job to",self.name,mv=1)
         out_files = []
         for job in self.jobs:
             for file in job.output_files:
@@ -408,8 +420,8 @@ class JoinedStep(Step):
         pass
 
  
-class Job(object):
-    def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, step = None, analysis_step = None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='08:00:00',ncpus=1, mem=None, exit_on_error=True, description=None, debug=False):
+class Job(BaseClass):
+    def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, step = None, analysis_step = None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='08:00:00',ncpus=1, mem=None, exit_on_error=True, description=None, debug=False, verbose=None):
         self.depends = ([] if depends is None else depends)
         self.input_files = ([] if input_files is None else input_files)
         self.output_files = ([] if output_files is None else output_files)
@@ -420,6 +432,7 @@ class Job(object):
         self.returncode = None
         self.exit_on_error = exit_on_error
         self.description = description
+        self.verbose = verbose
         if mem is None:
             self.mem = str(ncpus * 3825) + 'mb'
         else:
@@ -462,6 +475,8 @@ class Job(object):
         self.name = str(step.name) + ('_' if len(id)>0 else '') + id
         self.file_name = os.path.join(self.analysis.project,self.analysis.ana_dir,"jobscript/",self.name+".sh")   
         self.oe_fn=os.path.join(self.analysis.ana_dir,"log/",self.name)
+        if self.verbose is None:
+            self.verbose = step.verbose
         if self.debug:
             self.oe_fn+='_debug'
 
@@ -488,7 +503,7 @@ class Job(object):
 
 
     def write_jobscript(self):
-        
+        self.vprint("writing jobscript for",self.name,"to",os.path.expanduser(self.file_name),mv=1)
         commands = self.commands
         modules = self.modules 
         id = self.id
@@ -560,15 +575,20 @@ class Job(object):
         out, err = p.communicate()
         self.pbs_id = out.strip() 
         self.analysis.append_submit_log(command, out, err)
+        self.vprint("submitted",self.name,"with job ID",self.pbs_id,mv=1)
+        self.vprint("submit command was",command,mv=2)
+        self.vprint("out =",out,mv=2)
+        self.vprint("err =",err,mv=2)
         return self.pbs_id        
 
     def release(self):
         command = "qrls {0}".format(self.pbs_id)
-        #print "releasing", self.name, command
         p = subprocess.Popen(command, shell=True)
+        self.vprint("released job",self.name,"with",command,mv=1)
 
     def run_jobscript(self):
         command = os.path.expanduser(self.file_name)
+        self.vprint("running locally",self.name)
         self.execute(command)
         
     def execute(self,command):
@@ -629,7 +649,6 @@ class StageJob(Job):
             self.files.insert(0,'analyses/'+step.analysis.name+'/')
         if self.verbose is None:
             self.verbose = step.verbose
-        self.vprint = lambda text, min_verb=0: v_print(text,min_verb,self.verbose)
         #choose appropriate name and use this, attention with different file systems...
         #-> different files for local and remote ...
         #print self.oe_fn
@@ -637,7 +656,6 @@ class StageJob(Job):
         self.local_output = os.path.join(self.analysis.project, self.oe_fn+'_local.o')
 
     def stage(self,run_type='auto'):
-        # todo: incorporate depends!
         if self.analysis.host == 'gmi-lws12':
             partner = 'lab'
         else:
@@ -649,7 +667,9 @@ class StageJob(Job):
             depends = None
         else:
             depends = [job.pbs_id.strip() for job in self.depends]
-        #print self.local_output
+
+        self.vprint("staging",self.name,"in mode",run_type)
+
         (out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,afterok=depends,startonhold=True,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,project=self.analysis.dir_prefix,verbose=self.verbose,file_to_print_to=self.local_output)
         #if out is not None and out:
         #    print >>sys.stdout, 'stage.local_prepare_staging','out:',out 
@@ -658,10 +678,12 @@ class StageJob(Job):
         self.returncode = rc
         #print "ana_stage, out",out
         #print "ana_stage,err", err
+        #self.vprint(self.name +' ' + run_type + 'out=', out)
         if run_type == 'submit':
             #print self.name,'submitted with pbs_id', out
             #print self.name
             self.pbs_id = out.strip()
+            self.vprint("submitted",self.name,"with job ID",self.pbs_id,mv=1)
         
     #the following two functions are only used by the stage-out job
     #this is basically a dummy job that tests first how much files really need to be staged and
@@ -677,6 +699,8 @@ class StageJob(Job):
 #            raise ValueError('mode must be in {0} but is {1}'.format(modes, mode))
 #        jfn = os.path.expanduser(self.file_name)
         fn = os.path.splitext(self.file_name)[0] + "_prep" + os.path.splitext(self.file_name)[1]
+
+        self.vprint("Writing prepare-jobscript for",self.name,fn,mv=1)
         with open(os.path.expanduser(fn),'w') as jf: 
             jf.write("#!/bin/bash\n")
             id = self.id
@@ -732,8 +756,10 @@ class StageJob(Job):
             command = 'qsub {0}'.format(os.path.expanduser(self.prep_file_name))
             p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         out, err = p.communicate()
+        #print self.name, command
         self.pbs_id = out.strip()
         self.analysis.append_submit_log(command, out, err)
+        self.vprint("submitted prepare-jobscript for",self.name,"with job ID",self.pbs_id,mv=1)
         return self.pbs_id
 
         
