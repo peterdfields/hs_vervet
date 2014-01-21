@@ -2,16 +2,31 @@
 from __future__ import print_function
 import socket, warnings, os, datetime, textwrap, subprocess, sys
 import numpy as np
+from hs_vervet_basics import v_print
 
 #min total files size in bytes to use qsub for staging
 min_mcp_size = 500000000 
 min_qsub_size = 500000000
 
-def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_fn=None,name=None,afterok=None,afterany=None,startonhold=False,verbose=False):
+def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_fn=None,name=None,afterok=None,afterany=None,startonhold=False,verbose=0,file_to_print_to=None):
     # this function should only run on dmn,
     # where all file systems are seen
+    #empty the file to print to (usually things are appended
+    if file_to_print_to is not None:
+        v_print("",file=file_to_print_to,append=False)
+    #prints to stdout if file_to_print_to is None
+    def vprint(*text,**kwa):
+        """
+        use similar to python3 print function
+        additional argument mv or min_verbosity
+        and append (to know whether append to file or not)
+        """
+        kwa.update({"file":file_to_print_to,"verbosity":verbose})
+        v_print(*text,**kwa)
+    #vprint("something printed in the stage function in dmn_stage.py",0)
 
-    verboseprint = print if verbose else lambda *a, **k: None
+
+    #verboseprint = print if verbose else lambda *a, **k: None
 
     if afterany is None:
         afterany = []
@@ -43,7 +58,10 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
         file_ls = nonexist_file_ls
     
     #print('before:',file_ls)    
-
+    vprint("staging form '" +source_base+"' to '" + target_base + "'",mv=1)
+    vprint("staging mode: "+mode,mv=1)
+    vprint("run type: "+run_type,mv=1)
+    n_files = 0
     if mode == "newer" and (run_type == 'direct' or run_type == 'auto'):
         #remove files from file-list that are newer on target than on source
         def add_if_newer(file,file_ls):
@@ -52,8 +70,12 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
                 target_time = os.path.getmtime(os.path.join(target_base,file))
                 if source_time > target_time:
                     file_ls.append(file)
+                    vprint("Staging, source newer:"+file,mv=1)
+                else:
+                    vprint("Not staging, not newer on source: "+file,mv=1)
             except OSError:
                 file_ls.append(file)
+                vprint("Staging, not exist on target:"+file,mv=1)
         newer_on_source = []
         for file in file_ls:
             #print('from filelist:',file)
@@ -63,15 +85,18 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
                     #print('fs:',fs)
                     for f in fs:
                         #print('f:',f)
+                        n_files+=1
                         add_if_newer(os.path.join(root[len(source_base)+1:],f),newer_on_source)
             else:
+                n_files += 1
                 add_if_newer(file,newer_on_source)
+        vprint("Staging" + str(len(newer_on_source)) + " out of " + str(n_files) + " files." ,mv=1)
         file_ls = newer_on_source
     
     #print('after',file_ls)    
 
     if not file_ls:
-        print("Nothing to stage in mode {0}".format(mode))
+        vprint("Nothing to stage in mode {0}".format(mode))
         return (None, None, 0)
         
 
@@ -80,25 +105,28 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
         try:
             sizes.append(os.path.getsize(os.path.join(source_base,file)))
         except OSError, e:
-            if verbose:
-                warnings.warn("Can't check size of file. Does not exist. Copy operation might not be optimised. "+str(e),UserWarning)
+            vprint(warnings.warn("Can't check size of file. Does not exist. Copy operation might not be optimised. "+str(e),UserWarning),mv=1)
             
             
     sizes=np.array(sizes)
-    
+
     total = sizes.sum()
     number = sizes.shape[0]
     mean = sizes.mean()
     median = np.median(sizes)
     
     #implement a check for many small files (using number and median) and zip if necessary
+    
+    vprint("Total file size is " + str(total) + " bytes.",mv=1)  
 
     if total <= min_mcp_size:
         method = 'cp'
+        vprint("using cp",mv=1)
     else:
         method = 'mcp'
+        vprint("using mcp",mv=1)
     
-    job_fn = write_jobscript(file_ls,source_base,target_base,mode,method,job_fn=job_fn,out_fn=out_fn,name=name)
+    job_fn = write_jobscript(file_ls,source_base,target_base,mode,method,job_fn=job_fn,out_fn=out_fn,name=name,verbose=verbose)
 
     #print(job_fn)
 
@@ -146,10 +174,13 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
     #        print(job_fn,'out:',out,file=sys.stdout)
     #    if err is not None:    
     #        print(job_fn,'err:',err,file=sys.stderr)
+    
+    vprint('submitted stage job out: ' + out,mv=1)
+    vprint('submitted stage job err: ' + err,mv=1)
 
     return (out, err, rc)
 
-def write_jobscript(file_ls,source_base,destination_base,mode,method='mcp',job_fn=None,out_fn=None,name=None):
+def write_jobscript(file_ls,source_base,destination_base,mode,method='mcp',job_fn=None,out_fn=None,name=None,verbose=0):
     """
     options (mcp options):
     p ... preserve timestamp
@@ -183,6 +214,8 @@ def write_jobscript(file_ls,source_base,destination_base,mode,method='mcp',job_f
             options += 'u'
         elif mode == 'force':
             options += 'f'
+        if verbose > 0:
+            options += 'v'
 
         stage_script=textwrap.dedent("""\
         #!/bin/bash
@@ -192,7 +225,7 @@ def write_jobscript(file_ls,source_base,destination_base,mode,method='mcp',job_f
         #PBS -o {out_fn}.o
         #PBS -e {out_fn}.e
         #PBS -l select=1:ncpus=1
-        #PBS -l walltime=00:05:00
+        #PBS -l walltime=00:25:00
         cd {source_base}
         cp -{options} --parents {source} {destination_base}/
         """.format(name=name,out_fn=out_fn,source_base=source_base,options=options,source=' '.join([f for f in file_ls]),destination_base=destination_base))
@@ -204,7 +237,8 @@ def write_jobscript(file_ls,source_base,destination_base,mode,method='mcp',job_f
             options += 'u'
         elif mode == 'force':
             options += 'f'
-
+        if verbose > 0:
+            options += v
 
         stage_script=textwrap.dedent("""\
         #!/bin/bash
@@ -246,13 +280,14 @@ if __name__ == '__main__':
     parser.add_argument("--afterok",nargs='+',help='IDs of jobs that this job depends on. Only runs on exit status 0. See PBS documentation.')
     parser.add_argument("--afterany",nargs='+',help='IDs of jobs that this job depends on. Runs on any exit status of depend job. See PBS documentation.')
     parser.add_argument("-H","--start-on-hold",action="store_true",help='Start the job on user hold. Only effective if run type is submit.')
-    parser.add_argument("-v","--verbose",action="store_true")
-
+    parser.add_argument("-v","--verbose",type=int,default=0)
+    parser.add_argument("-l","--local-print-file",default=None,type=str)
     parser.add_argument("path_or_filename",help="Path or filename to stage.", nargs="+")
     
     args = parser.parse_args()
 
-    (out, err, rc) = stage(args.path_or_filename,args.source_base,args.target_base,args.mode,run_type=args.run_type,afterok=args.afterok,afterany=args.afterany,startonhold=args.start_on_hold,job_fn=args.job_fname,out_fn=args.stdout_fname,name=args.job_name)
+    (out, err, rc) = stage(args.path_or_filename,args.source_base,args.target_base,args.mode,run_type=args.run_type,afterok=args.afterok,afterany=args.afterany,startonhold=args.start_on_hold,job_fn=args.job_fname,out_fn=args.stdout_fname,name=args.job_name,file_to_print_to=args.local_print_file,verbose=args.verbose)
+
     
     #print('in main of dmn_stage,rc:',rc)
     print(out,file=sys.stdout)
