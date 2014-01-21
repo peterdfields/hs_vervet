@@ -65,7 +65,7 @@ import sys, os, datetime, subprocess, socket, filecmp, shutil
 sys.path.insert(0, os.path.expanduser('~/lib/python'))
 sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
 from hs_vervet.tools import hs_vervet_basics as hvb
-from hs_vervet.tools.stage import local_prepare_staging
+#from hs_vervet.tools.stage import local_prepare_staging
 
 
 class BaseClass(object):
@@ -349,6 +349,8 @@ class Step(BaseClass):
     def qsub(self):
         #hold makes sure that the depend jobs are seen by the dependent jobs
         
+        if self.stageout_job is not None:
+            self.stageout_job.write_prepare_jobscript()
         if self.stagein_job is not None:
             self.stagein_job.stage(run_type='submit')
         for job in self.jobs:
@@ -356,7 +358,6 @@ class Step(BaseClass):
             job.write_jobscript()
             job.qsub_jobscript()
         if self.stageout_job is not None:
-            self.stageout_job.write_prepare_jobscript()
             self.stageout_job.qsub_prepare_jobscript()
             #self.stageout_job.release()
         for job in self.jobs:
@@ -473,6 +474,8 @@ class Job(BaseClass):
         self.analysis = step.analysis
         id = self.id
         self.name = str(step.name) + ('_' if len(id)>0 else '') + id
+        sn = self.step.short_name
+        self.job_name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=8 else id[:8])
         self.file_name = os.path.join(self.analysis.project,self.analysis.ana_dir,"jobscript/",self.name+".sh")   
         self.oe_fn=os.path.join(self.analysis.project,self.analysis.ana_dir,"log/",self.name)
         if self.verbose is None:
@@ -518,10 +521,8 @@ class Job(BaseClass):
 
         with open(os.path.expanduser(self.file_name), "w") as jf:
             jf.write("#!/bin/bash\n")
-            sn = self.step.short_name
-            name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
             #print 'name:',name
-            jf.write("#PBS -N {}\n".format(name))
+            jf.write("#PBS -N {}\n".format(self.job_name))
             jf.write("#PBS -P vervetmonkey\n")
             if debug:
                 jf.write("#PBS -q debug\n")
@@ -650,27 +651,27 @@ class StageJob(Job):
         if self.verbose is None:
             self.verbose = step.verbose
         #choose appropriate name and use this, attention with different file systems...
-        #-> different files for local and remote ...
-
+        #-> different files for local and remote ...    
+    
     def stage(self,run_type='auto',wait=False):
 
         if self.analysis.host == 'gmi-lws12':
             partner = 'lab'
         else:
             partner = 'scratch'
-        id = self.id
-        sn = self.step.short_name
-        name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
         if run_type=='dry_run' or run_type=='direct':
-            depends = None
+            depends = []
         else:
             depends = [job.pbs_id.strip() for job in self.depends]
+        
+        if depends:
+            raise Exception('Dependencies not implemented for stage job in "stage".')        
 
         self.vprint("staging",self.name,"in mode",run_type)
         
         stage_command = self.stage_command(run_type,start_on_hold=True)
         if "dmn" not in self.analysis.host:
-            stage_command.insert(0,"ssh dmn.mendel.gmi.oeaw.ac.at nohup ")
+            stage_command = "ssh dmn.mendel.gmi.oeaw.ac.at nohup " + stage_command
         
         p = subprocess.Popen(stage_command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         
@@ -691,18 +692,23 @@ class StageJob(Job):
         #print "ana_stage, out",out
         #print "ana_stage,err", err
         #self.vprint(self.name +' ' + run_type + 'out=', out)
+
+        self.vprint("running stage command:",stage_command,mv=1)
+        self.vprint("output is:",out,mv=1)
+        self.vprint("err is:",err,mv=1)
+
         if run_type == 'submit':
             #print self.name,'submitted with pbs_id', out
-            #print self.name
+            #/print self.name
             self.pbs_id = out.strip()
             self.vprint("submitted",self.name,"with job ID",self.pbs_id,mv=1)
         
-    def stage_command(self,run_type='auto',startonhold=False):
+    def stage_command(self,run_type='auto',start_on_hold=False):
         #todo: implement a separate staging out that happens in any case, even if the jobs failed...
         run_types =  ['direct','submit','auto','dry_run']
         if run_type not in run_types:
             raise ValueError("run_type should be in {} but is {}".format(run_types,run_type))        
-        if startonhold:
+        if start_on_hold:
             hold = "-H "
         else:
             hold = ""
@@ -710,7 +716,7 @@ class StageJob(Job):
                         " -n {job_name} -l {print_to} {hold}{scratch} {project} {files}".format(
                         mode=self.mode,run_type=run_type,verbose=self.verbose,job_fn=self.file_name,
                         oe_fn=os.path.join(self.analysis.project,self.oe_fn),
-                        job_name=name,print_to=self.oe_fn+"prep_dmn.o", hold=hold,
+                        job_name=self.job_name,print_to=self.oe_fn+"_prep_dmn.o", hold=hold,
                         scratch=self.analysis.scratch,project=self.analysis.project,
                         files=" ".join(self.files))
 
@@ -725,9 +731,6 @@ class StageJob(Job):
         mem = '3825mb'
         ncpus = 1
         walltime = '00:20:00'
-        id = self.id
-        sn = self.step.short_name
-        name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
 #        if mode not in modes:
 #            raise ValueError('mode must be in {0} but is {1}'.format(modes, mode))
 #        jfn = os.path.expanduser(self.file_name)
@@ -736,31 +739,20 @@ class StageJob(Job):
         self.vprint("Writing prepare-jobscript for",self.name,fn,mv=1)
         with open(os.path.expanduser(fn),'w') as jf: 
             jf.write("#!/bin/bash\n")
-            id = self.id
-            sn = self.step.short_name
-            name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=7 else id[:7])
-            jf.write("#PBS -N {0}\n".format(name))
+            jf.write("#PBS -N {0}\n".format(self.job_name))
             jf.write("#PBS -q staging\n")
             jf.write("#PBS -P vervetmonkey\n")
-            jf.write("#PBS -o {0}_prep_job.o\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
-            jf.write("#PBS -e {0}_prep_job.e\n".format(os.path.join(os.path.expanduser(self.analysis.project),self.oe_fn)))
+            jf.write("#PBS -o {0}_prep_job.o\n".format(os.path.expanduser(self.oe_fn)))
+            jf.write("#PBS -e {0}_prep_job.e\n".format(os.path.expanduser(self.oe_fn)))
             jf.write("#PBS -l mem={0}\n".format(mem))
             jf.write("#PBS -l ncpus={0}\n".format(ncpus))
             jf.write("#PBS -l walltime={0}\n".format(walltime))
             jf.write("module load Python/2.7.3-goolf-1.4.10\n")
-            commands = ["stage -p scratch -d out -m {mode} -b {project} -v {verbose} -l {print_to} -j {job_fn} -o {out_fn} -n {job_name} {files}".format(
-                mode=self.mode,
-                project=self.analysis.dir_prefix, verbose=self.verbose, print_to=self.local_output,job_fn=self.file_name,
-                out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,files=" ".join(self.files))]            
-            stage_command = "dmn_stage.py -m {mode} -t auto -v {verbose} -j {job_fn} -o {oe_fn} -n {job_name} -l {print_to} {scratch} {project} {files}".format(
-                    mode=self.mode,verbose=self.verbose,job_fn=self.file_name,
-                    oe_fn=os.path.join(self.analysis.project,self.oe_fn),
-                    job_name=name,print_to=self.local_output+".dmn0",
-                    scratch=self.analysis.scratch,project=self.analysis.project,
-                    files=" ".join(self.files))
-            commands = ["if [[ `hostname -s` = dmn* ]]; then",
+            stage_command = self.stage_command()
+                        
+            commands = ["if [[ `hostname -s` = dmn* ]]; then","echo already at dmn","which dmn_stage.py",
                         stage_command,
-                        "else",
+                        "else","echo ssh to dmn","which dmn_stage.py",
                         "ssh dmn.mendel.gmi.oeaw.ac.at nohup {}".format(stage_command),
                         "fi"]
             for command in commands:
@@ -792,7 +784,7 @@ class StageJob(Job):
         #print self.name, command
         self.pbs_id = out.strip()
         self.analysis.append_submit_log(command, out, err)
-        self.vprint("submitted prepare-jobscript for",self.name,"with job ID",self.pbs_id,mv=1)
+        self.vprint("submitted",os.path.expanduser(self.prep_file_name),"with job ID",self.pbs_id,mv=1)
         return self.pbs_id
 
         

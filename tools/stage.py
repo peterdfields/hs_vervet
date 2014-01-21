@@ -99,7 +99,7 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
     if startonhold:
         command += " -H"
     if file_to_print_to is not None:
-        command += " -l {}.dmn".format(file_to_print_to)
+        command += " -l {}.still_using_stagepy".format(file_to_print_to)
     
     #print(command)
 

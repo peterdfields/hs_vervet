@@ -23,7 +23,7 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
         """
         kwa.update({"file":file_to_print_to,"verbosity":verbose})
         v_print(*text,**kwa)
-    #vprint("something printed in the stage function in dmn_stage.py",0)
+    vprint("output of",__file__,mv=10)
 
 
     #verboseprint = print if verbose else lambda *a, **k: None
@@ -90,7 +90,7 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
             else:
                 n_files += 1
                 add_if_newer(file,newer_on_source)
-        vprint("Staging" + str(len(newer_on_source)) + " out of " + str(n_files) + " files." ,mv=1)
+        vprint("Staging " + str(len(newer_on_source)) + " out of " + str(n_files) + " files." ,mv=1)
         file_ls = newer_on_source
     
     #print('after',file_ls)    
@@ -155,9 +155,12 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
             hold='-h '    
         else:
             hold=''
-        p = subprocess.Popen("qsub {hold}{depend_str} {job_fn}".format(hold=hold,depend_str=depend_str,job_fn=job_fn),shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        command = "qsub {hold}{depend_str} {job_fn}".format(hold=hold,depend_str=depend_str,job_fn=job_fn)
+        p = subprocess.Popen(command,shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        vprint("submitted stage job with:",command,mv=1)
         out, err = p.communicate()    #ran_as = 'submit'
     else:
+        vprint("running stage job at",socket.gethostname(),":",job_fn,mv=1)
         p = subprocess.Popen(job_fn,shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         out, err = p.communicate()
         with open(out_fn+'.o','w') as f:
@@ -166,7 +169,8 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
             f.write(err)
         #ran_as = 'direct'
     
-    
+
+
     rc = p.returncode
 
     #if run_type != 'submit':
@@ -175,8 +179,8 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
     #    if err is not None:    
     #        print(job_fn,'err:',err,file=sys.stderr)
     
-    vprint('submitted stage job out: ' + out,mv=1)
-    vprint('submitted stage job err: ' + err,mv=1)
+    vprint('stage job out: ' + out,mv=1)
+    vprint('stage job err: ' + err,mv=1)
 
     return (out, err, rc)
 
