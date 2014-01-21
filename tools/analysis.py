@@ -750,9 +750,9 @@ class StageJob(Job):
             jf.write("module load Python/2.7.3-goolf-1.4.10\n")
             stage_command = self.stage_command()
                         
-            commands = ["if [[ `hostname -s` = dmn* ]]; then","echo already at dmn","which dmn_stage.py",
+            commands = ["if [[ `hostname -s` = dmn* ]]; then","echo already at dmn",
                         stage_command,
-                        "else","echo ssh to dmn","which dmn_stage.py",
+                        "else","echo ssh to dmn",
                         "ssh dmn.mendel.gmi.oeaw.ac.at nohup {}".format(stage_command),
                         "fi"]
             for command in commands:
