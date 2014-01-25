@@ -133,7 +133,7 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
     if run_type == 'dry_run':
         with open(os.path.expanduser(job_fn),'r') as f:
             for line in f:
-                print(line)
+                print(line.strip())
         sys.exit(0)
     
 

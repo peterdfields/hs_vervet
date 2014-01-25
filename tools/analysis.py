@@ -60,12 +60,76 @@ Make it possible to merge analysis steps.
 Fix stageout to first submit a diagnostic job that then submits the real stage jobs. 
 More sophisticated staging methods for stage out.
 
+Generic use for different options:
+scenarios:
+----
+1)
+host = mendel
+run = qsub
+staging = yes
+status = works
+------------
+2)
+host = mendel
+run = direct_run_mendel
+staging = yes
+status = test it!
+------------
+3)
+host = mendel
+run = direct_run_mendel
+staging = no
+status = test it!
+4)
+host = mendel
+run = run on lws
+staging = yes
+status = implement
+5)
+host = lws
+run = run on lws
+staging = yes
+status = this is the most tricky, because staging should happen from mendel; the project has to be created on mendel somehow
+6)
+host = lws
+run = run on lws
+staging = no
+status = this should be easy to implement, everythin happend on lws, no staging at all
+
+Note: 4 and 5 should do exactly the same thing, only that it is executed from mendel once and on lws the other time.
+Maybe we should implement 4 and not offer 5, as a first approach? Or only 5?
+
+only offer 1,3,5,6?
+
+#implement check whether input exists for no-staging mode
+
 """
 import sys, os, datetime, subprocess, socket, filecmp, shutil
 sys.path.insert(0, os.path.expanduser('~/lib/python'))
 sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
 from hs_vervet.tools import hs_vervet_basics as hvb
-#from hs_vervet.tools.stage import local_prepare_staging
+
+
+
+
+#some global variables
+#max walltime in seconds
+max_walltime = 48*3600
+
+
+
+def pretty_comment(comment,title,sep='-'):
+
+    fill_to = 60
+    #offset = 5
+    head = "#" + sep*(fill_to-1) + '\n' + "#" + title + '\n' #sep*offset + title + sep*(fill_to-1-offset-len(title)) + '\n'
+    body = ''
+    for line in comment.split("\n"):
+        if line:
+            body += "#" + line + '\n' # sep*(fill_to-1-len(line)) + '\n'
+    body += "#" + sep*(fill_to-1) + '\n'
+    return head+body
+
 
 
 class BaseClass(object):
@@ -126,7 +190,7 @@ class Analysis(BaseClass):
         self.project =  os.path.join("~", project_dir_prefix + "_project")
         self.dir_prefix = project_dir_prefix
         self.project_name = project_name 
-        self.description = description
+        self.description = (description if description is not None else '')
         self.ana_dir = os.path.join('analyses/',self.name)
         self.submit_log_fn = os.path.join(self.project,self.ana_dir,'log/', self.name+"_submit_log.txt") 
         for direc in ["_data","log","script","jobscript","io","output"]:
@@ -159,13 +223,28 @@ class Analysis(BaseClass):
         with open(os.path.expanduser(self.submit_log_fn),'a') as lf:
             date = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
             lf.write(date+'\t'+jobfile+'\t'+out+'\t'+err+'\n')
+
     def write_and_qsub_all(self):
         for step in self.steps:
             for job in step.jobs:
                 job.write_jobscript()
                 job.qsub_jobscript()
-    def join_steps(steps=None,all=False):
-        pass
+
+    def join_steps(self,steps,name=None,join_jobs_on='id'):
+        #check whether steps list is a sublist of analysis.steps
+        def position_sublist(lst, sublst):
+            n = len(sublst)
+            return [(sublst == lst[i:i+n]) for i in xrange(len(lst)-n+1)].index(True)
+        try:
+            pos = position_sublist(self.steps,steps)
+        except ValueError:
+            raise Exception("The steps to join must be a sublist of analysis.steps")
+        if name == None:
+            name = 'joined' + '_' + '_'.join([step.name for step in steps])
+        js = JoinedStep(steps,name,self,join_jobs_on=join_jobs_on)
+        self.steps = self.steps[:pos] + [js] + self.steps[pos+len(steps):]       
+        return js
+            
             
     
 
@@ -182,7 +261,7 @@ class Step(BaseClass):
         self.default_run = default_run
         self.stagein_job = None
         self.stageout_job = None
-        self.description = None
+        self.description = (description if description is not None else '')
         self.verbose = verbose
         if analysis is None:
             self.analysis = analysis
@@ -237,41 +316,41 @@ class Step(BaseClass):
         for job in jobs:
             self.append_job(job)
 
-
-    def join(self,step,mode='append',join_jobs=False,join_jobs_on='id'):
-        """
-        step will be appended to self
-        """
-        modes = ['append','prepend']
-        if mode not in modes:
-            raise ValueError('mode shoud be in {0} but is {1}'.format(modes,modes))
-        if mode == 'append':
-            self.append_jobs(step.jobs)
-        elif mode == 'prepend':
-            raise UserException('Not implemented.')
-
-        if join_jobs:
-            self.join_jobs(join_on=join_jobs_on)
-        if self.analysis is not None:
-            self.analysis.steps.remove(step)
-
-    def join_jobs(self,join_on='id'):
-        """
-        jobs will be joined and commands joined from left to right
-        """
-        join_ons=['id','all']
-        if join_on not in join_ons:
-            raise ValueError('join_on shoud be in {0} but is {1}'.format(join_ons,join_on))
-        if join_on == 'all':
-            for job in self.jobs[1:]:
-                self.jobs[0].join(job)
-        elif join_on == 'id':
-            ids = [job.id for job in self.jobs]
-            unique_ids = list(set(ids))
-            job_sets = [[job for job in self.jobs if job.id == id] for id in unique_ids]
-            for js in job_sets:
-                for job in js[1:]:
-                    js[0].join(job)
+    
+#    def join(self,step,mode='append',join_jobs=False,join_jobs_on='id'):
+#        """
+#        step will be appended to self
+#        """
+#        modes = ['append','prepend']
+#        if mode not in modes:
+#            raise ValueError('mode shoud be in {0} but is {1}'.format(modes,modes))
+#        if mode == 'append':
+#            self.append_jobs(step.jobs)
+#        elif mode == 'prepend':
+#            raise UserException('Not implemented.')
+#
+#        if join_jobs:
+#            self.join_jobs(join_on=join_jobs_on)
+#        if self.analysis is not None:
+#            self.analysis.steps.remove(step)
+#
+#    def join_jobs(self,join_on='id'):
+#        """
+#        jobs will be joined and commands joined from left to right
+#        """
+#        join_ons=['id','all']
+#        if join_on not in join_ons:
+#            raise ValueError('join_on shoud be in {0} but is {1}'.format(join_ons,join_on))
+#        if join_on == 'all':
+#            for job in self.jobs[1:]:
+#                self.jobs[0].join(job)
+#        elif join_on == 'id':
+#            ids = [job.id for job in self.jobs]
+#            unique_ids = list(set(ids))
+#            job_sets = [[job for job in self.jobs if job.id == id] for id in unique_ids]
+#            for js in job_sets:
+#                for job in js[1:]:
+#                    js[0].join(job)
                 
             
         
@@ -310,7 +389,6 @@ class Step(BaseClass):
         if self.stagein_job is not None:
             self.stagein_job.stage(run_type='dry_run')
         for job in self.jobs:
-            job.commands.insert(0,'PROJECT_HOME=' + self.analysis.scratch)
             job.write_jobscript()
         if self.stageout_job is not None:
             self.stageout_job.stage(run_type='dry_run')
@@ -319,7 +397,6 @@ class Step(BaseClass):
         if self.stagein_job is not None:
             self.stagein_job.stage(run_type='direct')
         for job in self.jobs:
-            job.commands.insert(0,'PROJECT_HOME=' + self.analysis.scratch)
             job.write_jobscript()
         if parallel:
             if nprocs == 'auto':
@@ -334,7 +411,6 @@ class Step(BaseClass):
 
     def project_run(self,parallel=False,nprocs='auto'):   
         for job in self.jobs:
-            job.commands.insert(0,'PROJECT_HOME='+self.analysis.project)
             job.write_jobscript()
         if parallel:
             if nprocs == 'auto':
@@ -354,7 +430,6 @@ class Step(BaseClass):
         if self.stagein_job is not None:
             self.stagein_job.stage(run_type='submit')
         for job in self.jobs:
-            job.commands.insert(0,'PROJECT_HOME=' + self.analysis.scratch)
             job.write_jobscript()
             job.qsub_jobscript()
         if self.stageout_job is not None:
@@ -400,7 +475,7 @@ class Step(BaseClass):
   
 
     def add_stageout(self, stage_analysis_dir=True, add_to_jobs=False):
-        self.vprint("addint stageout job to",self.name,mv=1)
+        self.vprint("adding stageout job to",self.name,mv=1)
         out_files = []
         for job in self.jobs:
             for file in job.output_files:
@@ -417,12 +492,50 @@ class Step(BaseClass):
 AnalysisStep = Step
 
 class JoinedStep(Step):
-    def __init__(self):
-        pass
+    def __init__(self,steps, name, analysis, join_jobs=True,join_jobs_on='id', append_to_ana=True, description=None, stagein=True, stageout=True, default_run='qsub', verbose = None):
+        self.jobs = []
+        self.name = name
+        self.stagein = stagein
+        self.stageout = stageout
+        self.default_run = default_run
+        self.stagein_job = None
+        self.stageout_job = None
+        self.description = (description if description is not None else '')
+        self.verbose = verbose
+        self.depend_steps = []
+
+        if analysis is None:
+            self.analysis = analysis
+        else: 
+            if append_to_ana:
+                analysis.append_step(self)
+            else:
+                self.bind_to_analysis(analysis)
+        self.add_name(name)
+        if join_jobs:
+            join_ons=['id','all']
+            if join_jobs_on not in join_ons:
+                raise ValueError('join_on shoud be in {0} but is {1}'.format(join_ons,join_on))
+            if join_jobs_on == 'id':
+                #check whether all steps have jobs with identical ids:
+                ids = lambda step: [job.id for job in step.jobs]
+                if not all(ids(s) == ids(steps[0]) for s in steps):
+                    raise Exception("To join jobs on ids, all steps must have jobs with the same ids.")
+                #join the jobs on the id
+                jobs = [JoinedJob([[job for job in step.jobs if job.id == id][0] for step in steps]) for id in ids(steps[0])]
+            elif join_jobs_on == 'all':
+                jobs = [JoinedJob([job for step in steps for job in step.jobs])]
+        else:
+            raise Exception('Not joining jobs in a Joined Step is not implemented. Use join_jobs=True.')
+            
+        for job in jobs:
+            self.append_job(job)
+
+
 
  
 class Job(BaseClass):
-    def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, step = None, analysis_step = None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='08:00:00',ncpus=1, mem=None, exit_on_error=True, description=None, debug=False, verbose=None):
+    def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, step = None, analysis_step = None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='04:00:00',ncpus=1, mem=None, exit_on_error=True, description=None, debug=False, verbose=None):
         self.depends = ([] if depends is None else depends)
         self.input_files = ([] if input_files is None else input_files)
         self.output_files = ([] if output_files is None else output_files)
@@ -432,7 +545,7 @@ class Job(BaseClass):
         self.pbs_id = None
         self.returncode = None
         self.exit_on_error = exit_on_error
-        self.description = description
+        self.description = (description if description is not None else '')
         self.verbose = verbose
         if mem is None:
             self.mem = str(ncpus * 3825) + 'mb'
@@ -450,22 +563,47 @@ class Job(BaseClass):
         #for backwards comatability
         #analysis_step is depriciated, use step
         elif analysis_step is not None:
+            UserWarning('analysis_step is depriciated, use step')
             self.bind_to_step(analysis_step)
-            if self.step.analysis is not None:
-                host = self.analysis.host
-            else:
-                host = socket.gethostname()
+            #if self.step.analysis is not None:
+            #    host = self.analysis.host
+            #else:
+            #    host = socket.gethostname()
         else:
             self.name = None
             self.step = None
             self.file_name = None
-            host = socket.gethostname()
-        cluster_commands = ([] if cluster_commands is None else cluster_commands)
-        local_commands = ([] if local_commands is None else local_commands)
-        self.commands = ["cd $PROJECT_HOME"] + (local_commands if 'lws12' in host else cluster_commands) +  ([] if commands is None else commands)
-        cluster_modules = ([] if cluster_modules is None else cluster_modules)
-        local_modules = ([] if local_modules is None else local_modules)
-        self.modules = ([] if modules is None else modules) + (local_modules if 'lws12' in host else cluster_modules)
+            #host = socket.gethostname()
+        
+        d = {"commands":commands,"local_commands":local_commands,"cluster_commands":cluster_commands,"modules":modules,"cluster_modules":cluster_modules,"local_modules":local_modules}
+
+        #embed single string commands in lists:
+        for k,v in d.items():
+            if type(v) == str or type(v) == Command:
+                d[k]=[v]
+                #print "changing", d,k,v
+
+        #print d
+        #print commands, cluster_commands,local_commands
+
+        self.cluster_commands = ([] if d['cluster_commands'] is None else d['cluster_commands'])
+        self.local_commands = ([] if d['local_commands'] is None else d['local_commands'])
+        self.commands =  ([] if d['commands'] is None else d['commands'])
+        self.cluster_modules = ([] if d['cluster_modules'] is None else d['cluster_modules'])
+        self.local_modules = ([] if d['local_modules'] is None else d['local_modules'])
+        self.modules = ([] if d['modules'] is None else d['modules'])
+
+        #for backwards compatability
+        for commands in [self.cluster_commands,self.local_commands,self.commands]:
+            for i,c in enumerate(commands):
+                if type(c) != Command:
+                    try:
+                        commands[i] = Command(c)
+                    except:
+                        print commands[i]
+                        raise
+        
+
         if self.step is not None and append_to_ana:
             self.step.append_job(self)
 
@@ -503,9 +641,79 @@ class Job(BaseClass):
         else:
             ran_noerror = False
         return ran_noerror
+    
+    def pbs_header(self):
+        header = ''  
+        header += "#!/usr/bin/env bash\n"
+        header += "#PBS -N {}\n".format(self.job_name)
+        header += "#PBS -P {}\n".format(self.analysis.project_name)
+        if self.debug:
+            header += "#PBS -q debug\n"
+        else:
+            header += "#PBS -l mem={}\n".format(self.mem)
+            header += "#PBS -l ncpus={}\n".format(self.ncpus)
+            header += "#PBS -l walltime={}\n".format(self.walltime)
+            header += "#PBS -o {}.o\n".format(os.path.expanduser(self.oe_fn))
+            header += "#PBS -e {}.e\n".format(os.path.expanduser(self.oe_fn))
+        if self.exit_on_error:
+            header += "#exit on error\n"
+            header += "set -e\n"
+        header += pretty_comment(self.analysis.description,"analysis: "+self.analysis.name,'=')
+        header += 'if [ -n "$PBS_ENVIRONMENT" ]; then\n'
+        header += 'PROJECT_HOME=' + self.analysis.scratch + '\n'
+        header += 'else\n'
+        header += 'PROJECT_HOME=' + self.analysis.project + '\n'
+        header += 'fi\n'
+        return header
 
+    def command_string(self):
+        cmd_str = ""
+        cmd_str += pretty_comment(self.step.description,"step: "+self.step.name,'+')
+        cmd_str += pretty_comment(self.description,"job: "+self.name,'-')
+            
+        #local and cluster modules:
+        if self.cluster_modules:
+            cmd_str += 'if [ -n "$BC_HPC_SYSTEM" ]; then\n'
+            for mod in self.cluster_modules:
+                cmd_str += "module load {}\n".format(mod)
+            cmd_str += "fi\n"
+        if self.local_modules:
+            cmd_str += 'if [ -z "$BC_HPC_SYSTEM" ]; then\n'
+            for mod in self.local_modules:
+                cmd_str += "module load {}\n".format(mod)
+            cmd_str += "fi\n"       
+        #load modules:
+        for module in self.modules:
+            cmd_str += "module load {}\n".format(module)
 
+        cmd_str += "cd $PROJECT_HOME\n"       
+
+        if self.cluster_commands:
+            cmd_str += 'if [ -n "$BC_HPC_SYSTEM" ]; then\n'
+            for cmd in self.cluster_commands:
+                cmd_str += cmd.cmd_str()
+            cmd_str += "fi\n"
+        if self.local_commands:
+            cmd_str += 'if [ -z "$BC_HPC_SYSTEM" ]; then\n'
+            for cmd in self.local_commands:
+                cmd_str += cmd.cmd_str()
+            cmd_str += "fi\n"
+        #command:
+        #print "the commands to write:",commands
+        for command in self.commands:
+            cmd_str += command.cmd_str()
+        return  cmd_str
+
+    def write_to_jobscript(self,strings):
+        with open(os.path.expanduser(self.file_name), "w") as jf:
+            for string in strings:
+                jf.write(string)
+
+    #depriciated:
     def write_jobscript(self):
+        self.write_to_jobscript([self.pbs_header(),self.command_string()])
+        self.chmod_jobscript()
+        """
         self.vprint("writing jobscript for",self.name,"to",os.path.expanduser(self.file_name),mv=1)
         commands = self.commands
         modules = self.modules 
@@ -532,24 +740,58 @@ class Job(BaseClass):
                 jf.write("#PBS -l walltime={}\n".format(walltime))
             jf.write("#PBS -o {}.o\n".format(os.path.expanduser(self.oe_fn)))
             jf.write("#PBS -e {}.e\n".format(os.path.expanduser(self.oe_fn)))
+            #basic description of the job
+            jf.write(pretty_comment(self.analysis.description,"analysis: "+self.analysis.name,'='))
+            #jf.write("\n")
+            #if self.analysis.description:
+            #    descr = '#' + self.analysis.description.replace("\n","\n#")
+            #    jf.write(descr)
+            #    jf.write("\n")
 
+            jf.write(pretty_comment(self.step.description,"step: "+self.step.name,'+'))
+            jf.write(pretty_comment(self.description,"job: "+self.name,'-'))
+            
             if self.exit_on_error:
+                jf.write("#exit on error\n")
                 jf.write("set -e\n")
+            #local and cluster modules:
+            if self.cluster_modules:
+                jf.write('if [ -n "$BC_HPC_SYSTEM" ]; then\n')
+                for mod in self.cluster_modules:
+                    jf.write("module load {}\n".format(mod))
+                jf.write("fi\n")
+            if self.local_modules:
+                jf.write('if [ -z "$BC_HPC_SYSTEM" ]; then\n')
+                for mod in self.local_modules:
+                    jf.write("module load {}\n".format(mod))
+                jf.write("fi\n")           
             #load modules:
             for module in modules:
                 jf.write("module load {}\n".format(module))
+
+
+            if self.cluster_commands:
+                jf.write('if [ -n "$BC_HPC_SYSTEM" ]; then\n')
+                for cmd in self.cluster_commands:
+                    cmd.write(jf)
+                    jf.write("\n")
+                jf.write("fi\n")
+            if self.local_commands:
+                jf.write('if [ -z "$BC_HPC_SYSTEM" ]; then\n')
+                for cmd in self.local_commands:
+                    cmd.write(jf)
+                    jf.write("\n")
+                jf.write("fi\n")
             #command:
+            #print "the commands to write:",commands
             for command in commands:
-                #try:
-                jf.write(command)
-                #except:
-                #    print 'command:',  command
-                #    print 'commands:', commands
-                #    raise
+                command.write(jf)
                 jf.write('\n')
         self.chmod_jobscript()
         #return jfn
-    
+    """
+
+
     def chmod_jobscript(self,file='auto'):
         if file=='auto':
             file = self.file_name
@@ -614,9 +856,104 @@ class Job(BaseClass):
         print "output_files:", self.output_files 
         print "-"*50
         
+class JoinedJob(Job):
+    """
+    This class holds several job objects to create a single job.
+    Per default it takes the sum of walltimes, the maximim of cores
+    and of memory requested.
+    """
+    def __init__(self,jobs, step = None, append_to_ana=True, id='', depends=None, ncpus=None, mem=None, walltime=None, exit_on_error=True, description=None, debug=False, verbose=None):
+        def mem_in_mb(mem_str):
+            if mem_str[-2:] == 'gb':
+                mem = int(mem_str[:-2])*1024
+            elif mem_str[-2:] == 'mb':
+                mem = int(mem_str[:-2])
+            else:
+                raise Exception('Cannot parse memory string: '+mem_str)
+            return mem
+    
+        def time_delta(time_str):
+            t = datetime.datetime.strptime(time_str,"%H:%M:%S")
+            return datetime.timedelta(hours=t.hour,minutes=t.minute,seconds=t.second)
+ 
+        #implement time comparison
+        def seconds(time_str):
+            times = map(int,time_str.split(":"))
+            if len(times) == 3:
+                return times[2] + 60*(times[1] +times[0]*60)   
+            else:
+                raise ValueError("walltime should have format 'HH:MM:SS'")
+        
+        def time_str(seconds):
+            hours, rest = divmod(seconds, 3600)
+            minutes, seconds = divmod(rest, 60)
+            return "{}:{}:{}".format(hours,minutes,seconds)
+
+        self.jobs = jobs
+
+        if ncpus is None:
+            self.ncpus = max([job.ncpus for job in jobs])
+        else:
+            self.ncpus = ncpus
+
+        if mem is None:
+            self.mem = str(max([mem_in_mb(job.mem) for job in jobs])) + 'mb'
+        else:
+            self.mem = mem
+
+        if walltime is None:
+            #add up the individual job walltimes
+            sum_walltime = reduce(lambda x,y: x+y, map(lambda job: seconds(job.walltime), jobs))
+            if sum_walltime > max_walltime:
+                raise Exception("Sum of walltimes exceeds maximum walltime. Consider setting it with keyword walltime.") 
+            self.walltime = time_str(sum_walltime)
+        else:
+            self.walltime = walltime
+
+        if not id:
+            if not all(job.id == jobs[0].id for job in jobs):
+                raise Exception("Jobs don't have same id. Provide id for JoinedStep in this case! IDs: "+str([job.id for job in jobs]))
+            else:
+                self.id = jobs[0].id
+        else:
+            self.id = id
+        
+        #output and input files are the union of those of the jobs to be joined
+        self.input_files = list(set(reduce(lambda x,y: x+y,[job.input_files for job in jobs])))    
+        self.output_files = list(set(reduce(lambda x,y: x+y,[job.output_files for job in jobs])))    
+        
+        #only add 
+        self.depends = list(set((depends if depends is not None else []) +
+                    reduce(lambda x,y: x+y,[[j for j in job.depends if j not in jobs] for job in jobs])))
+
+        self.debug = debug
+        self.pbs_id = None
+        self.returncode = None
+        self.exit_on_error = exit_on_error
+        self.description = (description if description is not None else '')
+        self.verbose = verbose
+        
+
+        if step is not None:
+            self.bind_to_step(step)
+        else:
+            self.name = None
+            self.step = None
+            self.file_name = None
+       
+        if self.step is not None and append_to_ana:
+            self.step.append_job(self)
+    
+   
+    def write_jobscript(self):
+        self.write_to_jobscript([self.pbs_header()]+[job.command_string() for job in self.jobs])
+        self.chmod_jobscript()
+    
+    
+
 
 class StageJob(Job):
-    def __init__(self,  direction, files=None, step=None, stage_analysis_dir=True, mode='newer',depends=None,  verbose=None, debug=False):
+    def __init__(self,  direction, files=None, step=None, stage_analysis_dir=True, mode='newer',depends=None, description=None,  verbose=None, debug=False):
         if direction not in ['in','out']:
             raise ValueError('direction should be "in" or "out" but is {}'.format(direction))
         self.direction = direction
@@ -626,6 +963,7 @@ class StageJob(Job):
         self.stage_analysis_dir = stage_analysis_dir
         self.mode = mode
         self.verbose = verbose
+        self.description = (description if description is not None else '')
         if step is not None:
             self.bind_to_step(step)
         else:
@@ -667,7 +1005,7 @@ class StageJob(Job):
         if depends:
             raise Exception('Dependencies not implemented for stage job in "stage".')        
 
-        self.vprint("staging",self.name,"in mode",run_type)
+        self.vprint("staging",self.name,"in mode",run_type,mv=1)
         
         stage_command = self.stage_command(run_type,start_on_hold=True)
         if "dmn" not in self.analysis.host:
@@ -715,7 +1053,7 @@ class StageJob(Job):
         stage_command = "dmn_stage.py -m {mode} -t {run_type} -v {verbose} -j {job_fn} -o {oe_fn}" \
                         " -n {job_name} -l {print_to} {hold}{scratch} {project} {files}".format(
                         mode=self.mode,run_type=run_type,verbose=self.verbose,job_fn=self.file_name,
-                        oe_fn=os.path.join(self.analysis.project,self.oe_fn),
+                        oe_fn=self.oe_fn,
                         job_name=self.job_name,print_to=self.oe_fn+"_prep_dmn.o", hold=hold,
                         scratch=self.analysis.scratch,project=self.analysis.project,
                         files=" ".join(self.files))
@@ -858,9 +1196,44 @@ class StageJob(Job):
         self.execute(command)
 
 class Command(object):
-    def __init__(self,command,description):
+    def __init__(self,command,description=None,job=None,format=True):
+        self.description = description if description is not None else ""
         self.command = command
-        self.description = description
+        if job is not None:
+            self.bind_to_job(job)
+        #One could add an exception that format is not used when Command is
+        #called from within this module (analyis.py)
+        #e.g. by checking whether callingframe.f_locals["__file__"] exists
+        if format:
+            callingframe = sys._getframe(1).f_locals
+            try:
+                self.command = self.command.format(**callingframe)
+            except KeyError:
+                print "The dict used for formating:", callingframe
+                raise
+    
+    def bind_to_job(self,job):
+        self.job = job
+        if self in job.commands:
+            raise Exception("Trying to add command to job.commands that is already added.")
+        job.commands.append(self)
+
+    def cmd_str(self):
+        cmd_str = ''
+        if self.description:
+            descr = '#' + self.description.replace("\n","\n#") + '\n'
+            cmd_str += descr
+        cmd_str += self.command
+        cmd_str += '\n' 
+        return cmd_str
+
+    def write(self,file):
+        if self.description:
+            descr = '#' + self.description.replace("\n","\n#")
+            file.write(descr)
+            file.write("\n")
+        file.write(self.command)
+        
                    
                     
                       

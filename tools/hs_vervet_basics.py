@@ -39,21 +39,6 @@ def try_make_dirs(direc):
         else: raise
 
 
-"""
-def v_print(text,min_verbosity=0,verbosity=0,file=None,append=True):
-    
-    if verbosity >= min_verbosity:
-        if file is None:
-            print(text)
-        else:
-            try:
-                print(text,file=file)
-            except AttributeError:
-                if append:
-                    print(text,file=open(file,'a'))
-                else:
-                    print(text,file=open(file,'w'))
-"""                    
 
 def v_print(*text,**kwa):
     """
@@ -75,6 +60,7 @@ def v_print(*text,**kwa):
         verbosity = 0
     try:
         file = kwa["file"]
+        try_make_dirs(os.path.split(file)[0])
         del kwa["file"]
     except KeyError:
         file = None
