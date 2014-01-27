@@ -135,9 +135,10 @@ def make_ana_dirs(base_dir,ana_dir):
 
 def is_cluster():
     #check whether on mendel
-    if os.environ["BC_HPC_SYSTEM"]:
+    try:
+        os.environ["BC_HPC_SYSTEM"]
         return True
-    else:
+    except KeyError:
         return False
 
 
@@ -221,6 +222,7 @@ class Analysis(BaseClass):
         # if on local workstation and staging enabled, create analysis folder hierarchy on cluster
         if self.stagein or self.stageout and self.host == 'workstation':
             command = """ssh dmn.mendel.gmi.oeaw.ac.at nohup python -c 'from hs_vervet.tools.analysis import make_ana_dirs; make_ana_dirs("{}","{}")'""".format(self.project,self.ana_dir)
+            print command
             subprocess.Popen(command,shell=True)
             
             
@@ -949,7 +951,7 @@ class StageJob(Job):
                 self.target = step.analysis.lab_dir
             elif self.direction == 'out':
                 self.source = step.analysis.lab_dir
-                self.target = step.analyis.project
+                self.target = step.analysis.project
         elif step.analysis.host == 'cluster':
             hid = 'scratch'
             if self.direction == 'in':
