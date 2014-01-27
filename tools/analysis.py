@@ -130,6 +130,9 @@ def pretty_comment(comment,title,sep='-'):
     body += "#" + sep*(fill_to-1) + '\n'
     return head+body
 
+def make_ana_dirs(base_dir,ana_dir):
+    for direc in ["_data","log","script","jobscript","io","output"]:
+        hvb.try_make_dirs(os.path.join(base_dir,ana_dir,direc))
 
 
 class BaseClass(object):
@@ -176,26 +179,23 @@ class Analysis(BaseClass):
 
     Todo:
     analysis.run_all()
-    analysis.join_steps()
-    
+    consistent local and mendel usage with optionall staging...
     """
-    def __init__(self, name=None,description=None,project_dir_prefix="vervet",project_name="vervetmonkey",verbose=0):
+    def __init__(self, name,project_dir,scratch_dir,project_name,description=None,verbose=0):
         callingframe = sys._getframe(1)
         c = callingframe.f_locals["__file__"]
         self.calling_fn = os.path.join(os.getcwdu(),
                 (c if c[:2]!='./' else c[2:]))
         self.name = name
         self.host = socket.gethostname()
-        self.scratch = os.path.join("~", project_dir_prefix + "_scratch")
-        self.project =  os.path.join("~", project_dir_prefix + "_project")
-        self.dir_prefix = project_dir_prefix
+        self.scratch = scratch_dir
+        self.project =  project_dir
         self.project_name = project_name 
         self.description = (description if description is not None else '')
         self.ana_dir = os.path.join('analyses/',self.name)
         self.submit_log_fn = os.path.join(self.project,self.ana_dir,'log/', self.name+"_submit_log.txt") 
-        for direc in ["_data","log","script","jobscript","io","output"]:
-            hvb.try_make_dirs(os.path.join(self.project,self.ana_dir,direc))
-            hvb.try_make_dirs(os.path.join(self.scratch,self.ana_dir,direc))
+        make_ana_dirs(self.project,self.ana_dir)
+        make_ana_dirs(self.scratch,self.ana_dir)
         self.steps=[]
         try:
             shutil.copy(self.calling_fn,os.path.join(os.path.expanduser(self.project),
@@ -1233,7 +1233,94 @@ class Command(object):
             file.write(descr)
             file.write("\n")
         file.write(self.command)
-        
-                   
+
+if __name__ == '__main__':
+    import argparse
+
+    default_dict = {"project_dir":"~/vervet_project","scratch_dir":"~/vervet_scratch","project_name":"vervetmonkey","library_dir":"~/script"}    
+
+    try:
+        with open("analysis.config",'r') as conf:
+            n = 0
+            for line in conf:
+                if line[0] == '#':
+                    continue
+                n+=1
+                el = line.split()
+                if len(el)<1:
+                    continue
+                if el[0] not in default_dict.keys():
+                    raise ValueError("Unrecognized input line in analysis.config: "+el)
+                default_dict[el[0]] = el[1]
+            print n, "defaults updated from analysis.config."
+    except IOError:
+        pass    
+    
+
+
+    parser=argparse.ArgumentParser(description="Initialise an new analysis. " \
+                                            "Default arguments can be supplied " \
+                                            "in a file analysis.config. "\
+                                            "Each line should be of the form: "\
+                                            "long-argument value")        
+    parser.add_argument("name",help="Name of the analysis (not including date).")
+    parser.add_argument("--date",default=datetime.datetime.strftime(datetime.datetime.now(),"%Y%m%d"),help="This date is added to the analysis name and folder. Should be YYYYMMDD. Default is today.")        
+    #try
+    parser.add_argument("--project_dir",default=None,help="The base directory in which the project will be created. To have the same path on cluster and workstation, you can use a symbolic link of the form '~/project_dir' that points to the real project location.")
+    parser.add_argument("--scratch_dir",default=None,help="Equivalent of <project_dir>. Location on the lustre file system to which analysis is staged.")
+    parser.add_argument("--project_name",default=None,help="Name of the project. This must be the name used in the PBS accounting system as supplied with qsub -N <project_name>.")       
+    parser.add_argument("--library_dir",default=None,help="Path to the analysis python module. Usually this is the directory in which this script resides. Avoid tilde expansion with single quotes to keep the generic ~, e.g. --library_dir '~/script'. (This applies if you want to run the analysis on different systems, such as cluster and workstation.)")
                     
-                      
+    args = parser.parse_args() 
+    
+    if args.project_dir is None:
+        args.project_dir = default_dict["project_dir"]
+    if args.scratch_dir is None:
+        args.scratch_dir = default_dict["scratch_dir"]
+    if args.project_name is None:
+        args.project_name = default_dict["project_name"]
+    if args.library_dir is None:
+        args.library_dir = default_dict["library_dir"]
+
+    ana_dir = os.path.join('analyses',args.date + '_' + args.name)
+
+    #create analysis directories:     
+    make_ana_dirs(args.project_dir,ana_dir)
+    print "creating project dir:"
+    print os.path.join(args.project_dir,ana_dir)
+    make_ana_dirs(args.scratch_dir,ana_dir)
+    print "creating scratch dir:"
+    print os.path.join(args.scratch_dir,ana_dir)
+
+    #create the anaylsis file
+    fn = os.path.expanduser(os.path.join(args.project_dir,ana_dir,'script',args.name+'.py'))
+    ana_str = "#!/usr/bin/env python\n"
+    ana_str += "#imports\n"
+    ana_str += "#add the location of the analysis module to the python path\n"
+    ana_str += "import sys, os\n"
+    ana_str += "sys.path.insert(0,os.path.expanduser('{}'))\n".format(args.library_dir)
+    ana_str += "from hs_vervet.tools import analysis as ana\n"
+    ana_str += "\n"
+    ana_str += "#optional: set some global varialbes here\n"
+    ana_str += "\n"
+    ana_str += "#create the analysis object\n"
+    ana_str += "analysis = ana.Analysis(name='{}',project_dir='{}',scratch_dir='{}',project_name='{}')\n".format(args.date + '_' + args.name,args.project_dir,args.scratch_dir,args.project_name)
+    #make an additional arguments that allows to write some job and step examples to the file ..
+    ana_str += '\n'
+    ana_str += '#define your steps and jobs here\n'
+    ana_str += '\n'
+    ana_str += "if __name__ == '__main__':\n"
+    ana_str += "    #run your analysis here\n"
+    ana_str += "    pass\n"
+    if os.path.exists(fn):
+        raise Exception('Analysis file {} exists. Delete it before running analyis.py.'.format(fn))
+    with open(fn,"w") as f:
+        f.write(ana_str)
+    
+    print "analysis script template written to:"
+    print fn
+        
+
+                    
+
+
