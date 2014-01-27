@@ -242,7 +242,7 @@ def write_jobscript(file_ls,source_base,destination_base,mode,method='mcp',job_f
         elif mode == 'force':
             options += 'f'
         if verbose > 0:
-            options += v
+            options += 'v'
 
         stage_script=textwrap.dedent("""\
         #!/bin/bash

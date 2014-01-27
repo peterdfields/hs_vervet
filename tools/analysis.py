@@ -119,7 +119,6 @@ max_walltime = 48*3600
 
 
 def pretty_comment(comment,title,sep='-'):
-
     fill_to = 60
     #offset = 5
     head = "#" + sep*(fill_to-1) + '\n' + "#" + title + '\n' #sep*offset + title + sep*(fill_to-1-offset-len(title)) + '\n'
@@ -134,9 +133,18 @@ def make_ana_dirs(base_dir,ana_dir):
     for direc in ["_data","log","script","jobscript","io","output"]:
         hvb.try_make_dirs(os.path.join(base_dir,ana_dir,direc))
 
+def is_cluster():
+    #check whether on mendel
+    if os.environ["BC_HPC_SYSTEM"]:
+        return True
+    else:
+        return False
+
 
 class BaseClass(object):
-
+    """
+    This template is used as parent of Analysis, Step and Job.
+    """
     def vprint(self,*text,**kwa):
         """
         use similar to python3 print function
@@ -181,15 +189,16 @@ class Analysis(BaseClass):
     analysis.run_all()
     consistent local and mendel usage with optionall staging...
     """
-    def __init__(self, name,project_dir,scratch_dir,project_name,description=None,verbose=0):
+    def __init__(self, name, stage=True, stagein=None, stageout=None, project_dir="~/vervet_project",scratch_dir="~/vervet_scratch",lab_dir="~/vervet_lab",project_name="vervetmonkey",description=None,verbose=0):
         callingframe = sys._getframe(1)
         c = callingframe.f_locals["__file__"]
         self.calling_fn = os.path.join(os.getcwdu(),
                 (c if c[:2]!='./' else c[2:]))
         self.name = name
-        self.host = socket.gethostname()
+        self.host = 'cluster' if is_cluster() else 'workstation'
         self.scratch = scratch_dir
         self.project =  project_dir
+        self.lab_dir = lab_dir
         self.project_name = project_name 
         self.description = (description if description is not None else '')
         self.ana_dir = os.path.join('analyses/',self.name)
@@ -206,7 +215,13 @@ class Analysis(BaseClass):
             else:
                 raise
         self.verbose = verbose
-    
+        self.stagein = (stagein if stagein is not None else stage)
+        self.stageout = (stageout if stageout is not None else stage)
+            
+        # if on local workstation and staging enabled, create analysis folder hierarchy on cluster
+        if self.stagein or self.stageout and self.host == 'workstation':
+            command = """ssh dmn.mendel.gmi.oeaw.ac.at nohup python -c 'from hs_vervet.tools.analysis import make_ana_dirs; make_ana_dirs("{}","{}")'""".format(self.project,self.ana_dir)
+            subprocess.Popen(command,shell=True)
             
             
         #subprocess.Popen("cd {}/script/hs_vervet && git pull origin master".format(self.scratch),shell=True)
@@ -315,46 +330,7 @@ class Step(BaseClass):
     def append_jobs(self,jobs):
         for job in jobs:
             self.append_job(job)
-
     
-#    def join(self,step,mode='append',join_jobs=False,join_jobs_on='id'):
-#        """
-#        step will be appended to self
-#        """
-#        modes = ['append','prepend']
-#        if mode not in modes:
-#            raise ValueError('mode shoud be in {0} but is {1}'.format(modes,modes))
-#        if mode == 'append':
-#            self.append_jobs(step.jobs)
-#        elif mode == 'prepend':
-#            raise UserException('Not implemented.')
-#
-#        if join_jobs:
-#            self.join_jobs(join_on=join_jobs_on)
-#        if self.analysis is not None:
-#            self.analysis.steps.remove(step)
-#
-#    def join_jobs(self,join_on='id'):
-#        """
-#        jobs will be joined and commands joined from left to right
-#        """
-#        join_ons=['id','all']
-#        if join_on not in join_ons:
-#            raise ValueError('join_on shoud be in {0} but is {1}'.format(join_ons,join_on))
-#        if join_on == 'all':
-#            for job in self.jobs[1:]:
-#                self.jobs[0].join(job)
-#        elif join_on == 'id':
-#            ids = [job.id for job in self.jobs]
-#            unique_ids = list(set(ids))
-#            job_sets = [[job for job in self.jobs if job.id == id] for id in unique_ids]
-#            for js in job_sets:
-#                for job in js[1:]:
-#                    js[0].join(job)
-                
-            
-        
-
     def run(self,mode=None,print_summary=False,staging=True,parallel=False,nprocs='auto'):
         modes=['qsub','scratch_run','write_jobscripts','project_run']
         if mode is None:
@@ -556,24 +532,15 @@ class Job(BaseClass):
 
         if step is not None:
             self.bind_to_step(step)
-            if self.step.analysis is not None:
-                host = self.analysis.host
-            else:
-                host = socket.gethostname()
         #for backwards comatability
         #analysis_step is depriciated, use step
         elif analysis_step is not None:
             UserWarning('analysis_step is depriciated, use step')
             self.bind_to_step(analysis_step)
-            #if self.step.analysis is not None:
-            #    host = self.analysis.host
-            #else:
-            #    host = socket.gethostname()
         else:
             self.name = None
             self.step = None
             self.file_name = None
-            #host = socket.gethostname()
         
         d = {"commands":commands,"local_commands":local_commands,"cluster_commands":cluster_commands,"modules":modules,"cluster_modules":cluster_modules,"local_modules":local_modules}
 
@@ -971,23 +938,34 @@ class StageJob(Job):
             self.step = None    
             self.file_name = None
             self.id = None
-            self.stage_fn = None
         self.input_files = None
         self.output_files = None    
         
     def bind_to_step(self,step):
-        if step.analysis.host == 'gmi-lws12':
-            hid = 'lws12'
-        elif 'login' in  step.analysis.host or 'dmn' in step.analysis.host:
-            hid = 'mendel'
-        self.id = 'stage' + self.direction + '_'  + hid
-        self.stage_fn = os.path.join(step.analysis.project,step.analysis.ana_dir,'io/',step.name+'.'+self.direction)
+        if step.analysis.host == 'workstation':
+            hid = 'lab'
+            if self.direction == 'in':
+                self.source = step.analysis.project
+                self.target = step.analysis.lab_dir
+            elif self.direction == 'out':
+                self.source = step.analysis.lab_dir
+                self.target = step.analyis.project
+        elif step.analysis.host == 'cluster':
+            hid = 'scratch'
+            if self.direction == 'in':
+                self.source = step.analysis.project
+                self.target = step.analysis.scratch
+            elif self.direction == 'out':
+                self.source = step.analysis.scratch
+                self.target = step.analyis.project
+            
+        self.id = 'stg' + self.direction + '_'  + hid
         Job.bind_to_step(self,step)
-        self.scratch = ('~/vervet_lab' if hid == 'lws12' else '~/vervet_scratch')
+        #self.scratch = ('~/vervet_lab' if hid == 'lws12' else '~/vervet_scratch')
         if self.stage_analysis_dir:
             self.files.insert(0,'analyses/'+step.analysis.name+'/')
-        if self.verbose is None:
-            self.verbose = step.verbose
+        #if self.verbose is None:
+        #    self.verbose = step.verbose
         #choose appropriate name and use this, attention with different file systems...
         #-> different files for local and remote ...    
     
@@ -1051,11 +1029,11 @@ class StageJob(Job):
         else:
             hold = ""
         stage_command = "dmn_stage.py -m {mode} -t {run_type} -v {verbose} -j {job_fn} -o {oe_fn}" \
-                        " -n {job_name} -l {print_to} {hold}{scratch} {project} {files}".format(
+                        " -n {job_name} -l {print_to} {hold}{source} {target} {files}".format(
                         mode=self.mode,run_type=run_type,verbose=self.verbose,job_fn=self.file_name,
                         oe_fn=self.oe_fn,
                         job_name=self.job_name,print_to=self.oe_fn+"_prep_dmn.o", hold=hold,
-                        scratch=self.analysis.scratch,project=self.analysis.project,
+                        source=self.source,target=self.target,
                         files=" ".join(self.files))
 
         return stage_command
@@ -1126,13 +1104,6 @@ class StageJob(Job):
         return self.pbs_id
 
         
-
-
-    def write_stage_fn_file(self):
-        with open(os.path.expanduser(self.stage_fn),'w') as f:
-            for fn in self.files:
-                f.write(fn+'\n')    
-
 #    def write_jobscript(self, mode='rsync',write_fn_file=True):
 #        if write_fn_file:
 #            self.write_stage_fn_file()
