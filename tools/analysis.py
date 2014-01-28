@@ -221,8 +221,9 @@ class Analysis(BaseClass):
             
         # if on local workstation and staging enabled, create analysis folder hierarchy on cluster
         if self.stagein or self.stageout and self.host == 'workstation':
-            command = """ssh dmn.mendel.gmi.oeaw.ac.at nohup python -c 'from hs_vervet.tools.analysis import make_ana_dirs; make_ana_dirs("{}","{}")'""".format(self.project,self.ana_dir)
-            print command
+            command = '''ssh dmn.mendel.gmi.oeaw.ac.at nohup "python -c 'from hs_vervet.tools.analysis import make_ana_dirs; make_ana_dirs(\\"{}\\",\\"{}\\")'"'''.format(self.project,self.ana_dir)
+            #print 'bla:',command
+            self.vprint("Creating analysis folder hierarchy on cluster...",mv=1)
             subprocess.Popen(command,shell=True)
             
             
@@ -373,7 +374,7 @@ class Step(BaseClass):
 
     def scratch_run(self,parallel=False,nprocs='auto'):
         if self.stagein_job is not None:
-            self.stagein_job.stage(run_type='direct')
+            self.stagein_job.stage(run_type='auto',wait=True,start_on_hold=False)
         for job in self.jobs:
             job.write_jobscript()
         if parallel:
@@ -385,7 +386,8 @@ class Step(BaseClass):
             for job in self.jobs:
                 job.run_jobscript()
         if self.stageout_job is not None:
-            self.stageout_job.stage(run_type='direct')
+            self.stageout_job.stage(run_type='auto',start_on_hold=False)
+            vprint("Attention stagout might be submitted to the cluster. Check whether it finished.",mv=1)
 
     def project_run(self,parallel=False,nprocs='auto'):   
         for job in self.jobs:
@@ -971,7 +973,7 @@ class StageJob(Job):
         #choose appropriate name and use this, attention with different file systems...
         #-> different files for local and remote ...    
     
-    def stage(self,run_type='auto',wait=False):
+    def stage(self,run_type='auto',wait=False,start_on_hold=True):
 
         if self.analysis.host == 'gmi-lws12':
             partner = 'lab'
@@ -987,7 +989,8 @@ class StageJob(Job):
 
         self.vprint("staging",self.name,"in mode",run_type,mv=1)
         
-        stage_command = self.stage_command(run_type,start_on_hold=True)
+        
+        stage_command = self.stage_command(run_type,start_on_hold=start_on_hold)
         if "dmn" not in self.analysis.host:
             stage_command = "ssh dmn.mendel.gmi.oeaw.ac.at nohup " + stage_command
         
@@ -995,10 +998,14 @@ class StageJob(Job):
         
         out, err = p.communicate()
         self.returncode = p.returncode
+
+        self.vprint("running stage command:",stage_command,mv=1)
+        self.vprint("output is:",out,mv=1)
+        self.vprint("err is:",err,mv=1)
         
         if wait:
             #naive check whether a job was submitted
-            if login in out:
+            if 'login' in out:
                 import poll_pbs
                 self.returncode = poll_pbs.wait_for_job(out.strip())
         #(out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,afterok=depends,startonhold=True,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,project=self.analysis.dir_prefix,verbose=self.verbose,file_to_print_to=self.local_output)
@@ -1011,9 +1018,6 @@ class StageJob(Job):
         #print "ana_stage,err", err
         #self.vprint(self.name +' ' + run_type + 'out=', out)
 
-        self.vprint("running stage command:",stage_command,mv=1)
-        self.vprint("output is:",out,mv=1)
-        self.vprint("err is:",err,mv=1)
 
         if run_type == 'submit':
             #print self.name,'submitted with pbs_id', out

@@ -4,7 +4,7 @@ import sys, time, subprocess, socket
 
 host = socket.gethostname()
 
-if "login" in host or dmn in host:
+if "login" in host or 'dmn' in host:
     call = ""
 else: 
     call = "ssh login.mendel.gmi.oeaw.ac.at nohup "
