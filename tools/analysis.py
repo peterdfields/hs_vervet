@@ -141,6 +141,14 @@ def is_cluster():
     except KeyError:
         return False
 
+def value_check(el,lst):
+    if el not in lst:
+        raise ValueError("Argument must be in {0} but is {1}".format(lst,el))
+
+def create_cluster_ana_folder(project_dir,ana_dir):
+            command = '''ssh dmn.mendel.gmi.oeaw.ac.at nohup "python -c 'from hs_vervet.tools.analysis import make_ana_dirs; make_ana_dirs(\\"{}\\",\\"{}\\")'"'''.format(project_dir,ana_dir)
+            #print 'bla:',command
+            subprocess.Popen(command,shell=True)
 
 class BaseClass(object):
     """
@@ -190,13 +198,23 @@ class Analysis(BaseClass):
     analysis.run_all()
     consistent local and mendel usage with optionall staging...
     """
-    def __init__(self, name, stage=True, stagein=None, stageout=None, project_dir="~/vervet_project",scratch_dir="~/vervet_scratch",lab_dir="~/vervet_lab",project_name="vervetmonkey",description=None,verbose=0):
+    def __init__(self, name, default_run = None, project_dir="~/vervet_project",scratch_dir="~/vervet_scratch",lab_dir="~/vervet_lab",project_name="vervetmonkey",description=None,verbose=0):
+
         callingframe = sys._getframe(1)
         c = callingframe.f_locals["__file__"]
         self.calling_fn = os.path.join(os.getcwdu(),
                 (c if c[:2]!='./' else c[2:]))
         self.name = name
         self.host = 'cluster' if is_cluster() else 'workstation'
+        if default_run is None:
+            if self.host == 'cluster':
+                default_run = 'qsub'
+            elif self.host == 'workstation':
+                default_run = 'scratch_run'
+        default_runs = ['qsub','scratch_run','project_run','write_jobscripts']
+        value_check(default_run, default_runs)
+        self.default_run = default_run
+        #print self.default_run
         self.scratch = scratch_dir
         self.project =  project_dir
         self.lab_dir = lab_dir
@@ -216,15 +234,7 @@ class Analysis(BaseClass):
             else:
                 raise
         self.verbose = verbose
-        self.stagein = (stagein if stagein is not None else stage)
-        self.stageout = (stageout if stageout is not None else stage)
             
-        # if on local workstation and staging enabled, create analysis folder hierarchy on cluster
-        if self.stagein or self.stageout and self.host == 'workstation':
-            command = '''ssh dmn.mendel.gmi.oeaw.ac.at nohup "python -c 'from hs_vervet.tools.analysis import make_ana_dirs; make_ana_dirs(\\"{}\\",\\"{}\\")'"'''.format(self.project,self.ana_dir)
-            #print 'bla:',command
-            self.vprint("Creating analysis folder hierarchy on cluster...",mv=1)
-            subprocess.Popen(command,shell=True)
             
             
         #subprocess.Popen("cd {}/script/hs_vervet && git pull origin master".format(self.scratch),shell=True)
@@ -269,7 +279,7 @@ class Analysis(BaseClass):
 
 class Step(BaseClass):
 
-    def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, description=None, depend_steps=None, stagein=True, stageout=True, default_run='qsub',  check_date_input = True, verbose = None):
+    def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, description=None, depend_steps=None, stagein=True, stageout=True, default_run=None,  check_date_input = True, verbose = None):
         # the next to lines are just for the following methods to work
         # the attributes will be set again by their constructors
         self.name = name
@@ -318,6 +328,8 @@ class Step(BaseClass):
             job.analysis = analysis
         if self.verbose is None:
             self.verbose=analysis.verbose
+        if self.default_run is None:
+            self.default_run = analysis.default_run
         
     def append_job(self, job):
         #only add the job if it is not added yet
@@ -333,27 +345,34 @@ class Step(BaseClass):
     def append_jobs(self,jobs):
         for job in jobs:
             self.append_job(job)
-    
-    def run(self,mode=None,print_summary=False,staging=True,parallel=False,nprocs='auto'):
+
+    def run(self,mode=None,print_summary=False,parallel=False,nprocs='auto'):
         modes=['qsub','scratch_run','write_jobscripts','project_run']
         if mode is None:
             mode = self.default_run
         if mode not in modes:
             raise Exception("mode must be in {0} but is {1}".format(modes,mode))
-        if mode == 'project_run':
-            staging = False
-        if staging == True:
-            #print "stage_job_created"
+        if mode !=  'project_run':
             self.prepare_staging()
         if print_summary:
-            self.vprint_summary()
+            self.print_summary()
         if mode == 'qsub':
+            if self.analysis.host == 'workstation':
+                raise Exception("mode qsub not available on workstation. Run on the cluster.")
+            self.run_type = 'qsub'
             self.qsub()
         elif mode == 'scratch_run':
+            if self.analysis.host == 'workstation':
+                # if on local workstation and staging enabled, create analysis folder hierarchy on cluster
+                self.vprint("Creating analysis folder hierarchy on cluster.",mv=1)       
+                create_cluster_ana_folder(self.analysis.project,self.analysis.ana_dir)
+            self.run_type = 'run'
             self.scratch_run(parallel=parallel,nprocs=nprocs)
         elif mode == 'write_jobscripts':
+            self.run_type = None
             self.write_jobscripts()
         elif mode == 'project_run':
+            self.run_type = 'run'
             self.project_run(parallel=parallel,nprocs=nprocs)
     
     def prepare_staging(self):
@@ -374,7 +393,7 @@ class Step(BaseClass):
 
     def scratch_run(self,parallel=False,nprocs='auto'):
         if self.stagein_job is not None:
-            self.stagein_job.stage(run_type='auto',wait=True,start_on_hold=False)
+            self.stagein_job.stage(run_type='auto')
         for job in self.jobs:
             job.write_jobscript()
         if parallel:
@@ -386,8 +405,8 @@ class Step(BaseClass):
             for job in self.jobs:
                 job.run_jobscript()
         if self.stageout_job is not None:
-            self.stageout_job.stage(run_type='auto',start_on_hold=False)
-            vprint("Attention stagout might be submitted to the cluster. Check whether it finished.",mv=1)
+            self.stageout_job.stage(run_type='auto')
+            #self.vprint("Attention stagout might be submitted to the cluster. Check whether it finished.",mv=1)
 
     def project_run(self,parallel=False,nprocs='auto'):   
         for job in self.jobs:
@@ -806,16 +825,42 @@ class Job(BaseClass):
         self.execute(command)
         
     def execute(self,command):
+        import select
         for depend_job in self.depends:
             if depend_job.returncode != 0:
                 raise Exception("{0} finished with exit code {1}, won't start {2}".format(depend_job.name,depend_job.returncode,self.name))
+        print "running", self.name
         p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        out, err = p.communicate()
-        self.returncode = p.returncode
-        for name, content in zip(['o','e'],[out,err]): 
+        if self.verbose >= 1:
+            stdout = []
+            stderr = []
+            while True:
+                reads = [p.stdout.fileno(), p.stderr.fileno()]
+                ret = select.select(reads, [], [])
+
+                for fd in ret[0]:
+                    if fd == p.stdout.fileno():
+                        read = p.stdout.readline()
+                        #only print if the line is non-empty
+                        if read.strip():
+                            sys.stdout.write(read)
+                        stdout.append(read)
+                    if fd == p.stderr.fileno():
+                        read = p.stderr.readline()
+                        if read.strip():
+                            sys.stderr.write(read)
+                        stderr.append(read)
+                if p.poll() != None:
+                    break
+            out = ''.join(stdout)
+            err = ''.join(stderr)
+        else:
+            out, err = p.communicate()
+
+        for name, content in zip(['o','e'],[out,err]):
             with open(os.path.expanduser(self.oe_fn+'.'+name),'w') as oef:
                 oef.write(content)
-        
+        self.returncode = p.returncode
 
     def print_summary(self):
         print "-"*50
@@ -973,22 +1018,20 @@ class StageJob(Job):
         #choose appropriate name and use this, attention with different file systems...
         #-> different files for local and remote ...    
     
-    def stage(self,run_type='auto',wait=False,start_on_hold=True):
-
-        if self.analysis.host == 'gmi-lws12':
-            partner = 'lab'
-        else:
-            partner = 'scratch'
-        if run_type=='dry_run' or run_type=='direct':
+    def stage(self,run_type='auto'):
+        if self.step.run_type=='run':
             depends = []
-        else:
+            wait = True
+            start_on_hold = False
+        elif self.step.run_type=='qsub':
             depends = [job.pbs_id.strip() for job in self.depends]
+            wait = False
+            start_on_hold =True
         
         if depends:
             raise Exception('Dependencies not implemented for stage job in "stage".')        
 
         self.vprint("staging",self.name,"in mode",run_type,mv=1)
-        
         
         stage_command = self.stage_command(run_type,start_on_hold=start_on_hold)
         if "dmn" not in self.analysis.host:
@@ -999,31 +1042,25 @@ class StageJob(Job):
         out, err = p.communicate()
         self.returncode = p.returncode
 
-        self.vprint("running stage command:",stage_command,mv=1)
-        self.vprint("output is:",out,mv=1)
-        self.vprint("err is:",err,mv=1)
+        out = out if out.strip() else None
+        err = err if err.strip() else None
+
+        self.vprint("running stage command:",stage_command,mv=2)
+        self.vprint("out is:",out,mv=2)
+        self.vprint("err is:",err,mv=2)
         
-        if wait:
-            #naive check whether a job was submitted
-            if 'login' in out:
-                import poll_pbs
-                self.returncode = poll_pbs.wait_for_job(out.strip())
-        #(out, err, rc) = local_prepare_staging(self.files,partner,self.direction,self.mode,run_type=run_type,afterok=depends,startonhold=True,job_fn=self.file_name,out_fn=os.path.join(self.analysis.project,self.oe_fn),job_name=name,project=self.analysis.dir_prefix,verbose=self.verbose,file_to_print_to=self.local_output)
-        #if out is not None and out:
-        #    print >>sys.stdout, 'stage.local_prepare_staging','out:',out 
-        #if err is not None:
-        #    print >>sys.stderr, 'stage.local_prepare_staging','err:',err
-        #self.returncode = rc
-        #print "ana_stage, out",out
-        #print "ana_stage,err", err
-        #self.vprint(self.name +' ' + run_type + 'out=', out)
-
-
-        if run_type == 'submit':
-            #print self.name,'submitted with pbs_id', out
-            #/print self.name
+        #naive check whether a job was submitted
+        if 'login' in out:
             self.pbs_id = out.strip()
-            self.vprint("submitted",self.name,"with job ID",self.pbs_id,mv=1)
+            self.vprint("Submitted",self.name,"with job ID",self.pbs_id,mv=1)
+            if wait:
+                import poll_pbs
+                self.vprint("Waiting for job {} to finish...".format(self.pbs_id))
+                self.returncode = poll_pbs.wait_for_job(out.strip())
+        else:
+            self.vprint("Staging job {} directly.".format(self.name),mv=1)
+
+
         
     def stage_command(self,run_type='auto',start_on_hold=False):
         #todo: implement a separate staging out that happens in any case, even if the jobs failed...
