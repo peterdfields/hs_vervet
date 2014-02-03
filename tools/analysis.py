@@ -23,7 +23,7 @@ analysis
 The module provides 3 classes: Analysis, Step, Job
 Each analysis is expected to contain several steps and each step one or more jobs.
 One can think of the analysis as the workflow of an experiment that logically belongs together.
-For instance, an analyis could be variant discovery for next generation sequencing. 
+For instance, an analysis could be variant discovery for next generation sequencing. 
 Steps are then discrete steps of this experiment. In example of variant discovery,
 steps could be: read_mapping, initial_variant_calling, local_realignment, variant_calling, filtering, ...
 Each step consists of several jobs (for instance for each individual or chromosme) and each job can have several commands.
@@ -1006,7 +1006,7 @@ class StageJob(Job):
                 self.target = step.analysis.scratch
             elif self.direction == 'out':
                 self.source = step.analysis.scratch
-                self.target = step.analyis.project
+                self.target = step.analysis.project
             
         self.id = 'stg' + self.direction + '_'  + hid
         Job.bind_to_step(self,step)
@@ -1020,15 +1020,18 @@ class StageJob(Job):
     
     def stage(self,run_type='auto'):
         if self.step.run_type=='run':
-            depends = []
+            #depends = []
             wait = True
             start_on_hold = False
         elif self.step.run_type=='qsub':
-            depends = [job.pbs_id.strip() for job in self.depends]
+            #depends = [job.pbs_id.strip() for job in self.depends]
             wait = False
             start_on_hold =True
-        
-        if depends:
+        elif self.step.run_type is None:
+            wait = False
+            start_on_hold = False        
+
+        if self.depends:
             raise Exception('Dependencies not implemented for stage job in "stage".')        
 
         self.vprint("staging",self.name,"in mode",run_type,mv=1)
@@ -1216,7 +1219,7 @@ class Command(object):
         if job is not None:
             self.bind_to_job(job)
         #One could add an exception that format is not used when Command is
-        #called from within this module (analyis.py)
+        #called from within this module (analysis.py)
         #e.g. by checking whether callingframe.f_locals["__file__"] exists
         if format:
             callingframe = sys._getframe(1).f_locals
@@ -1283,7 +1286,7 @@ if __name__ == '__main__':
     parser.add_argument("--project_dir",default=None,help="The base directory in which the project will be created. To have the same path on cluster and workstation, you can use a symbolic link of the form '~/project_dir' that points to the real project location.")
     parser.add_argument("--scratch_dir",default=None,help="Equivalent of <project_dir>. Location on the lustre file system to which analysis is staged.")
     parser.add_argument("--project_name",default=None,help="Name of the project. This must be the name used in the PBS accounting system as supplied with qsub -N <project_name>.")       
-    parser.add_argument("--library_dir",default=None,help="Path to the analysis python module. Usually this is the directory in which this script resides. Avoid tilde expansion with single quotes to keep the generic ~, e.g. --library_dir '~/script'. (This applies if you want to run the analysis on different systems, such as cluster and workstation.)")
+    #parser.add_argument("--library_dir",default=None,help="Path to the analysis python module. Usually this is the directory in which this script resides. Avoid tilde expansion with single quotes to keep the generic ~, e.g. --library_dir '~/script'. (This applies if you want to run the analysis on different systems, such as cluster and workstation.)")
                     
     args = parser.parse_args() 
     
@@ -1293,8 +1296,8 @@ if __name__ == '__main__':
         args.scratch_dir = default_dict["scratch_dir"]
     if args.project_name is None:
         args.project_name = default_dict["project_name"]
-    if args.library_dir is None:
-        args.library_dir = default_dict["library_dir"]
+    #if args.library_dir is None:
+    #    args.library_dir = default_dict["library_dir"]
 
     ana_dir = os.path.join('analyses',args.date + '_' + args.name)
 
@@ -1310,9 +1313,9 @@ if __name__ == '__main__':
     fn = os.path.expanduser(os.path.join(args.project_dir,ana_dir,'script',args.name+'.py'))
     ana_str = "#!/usr/bin/env python\n"
     ana_str += "#imports\n"
-    ana_str += "#add the location of the analysis module to the python path\n"
-    ana_str += "import sys, os\n"
-    ana_str += "sys.path.insert(0,os.path.expanduser('{}'))\n".format(args.library_dir)
+    #ana_str += "#add the location of the analysis module to the python path\n"
+    #ana_str += "import sys, os\n"
+    #ana_str += "sys.path.insert(0,os.path.expanduser('{}'))\n".format(args.library_dir)
     ana_str += "from hs_vervet.tools import analysis as ana\n"
     ana_str += "\n"
     ana_str += "#optional: set some global varialbes here\n"
@@ -1327,7 +1330,7 @@ if __name__ == '__main__':
     ana_str += "    #run your analysis here\n"
     ana_str += "    pass\n"
     if os.path.exists(fn):
-        raise Exception('Analysis file {} exists. Delete it before running analyis.py.'.format(fn))
+        raise Exception('Analysis file {} exists. Delete it before running analysis.py.'.format(fn))
     with open(fn,"w") as f:
         f.write(ana_str)
     

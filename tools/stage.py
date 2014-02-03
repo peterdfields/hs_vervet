@@ -2,6 +2,10 @@
 """
 input: non-flag arguments should be single or multiple files
 include option to read filenames from file
+TODO:
+- use analysis.config to get project and scratch dir
+(even better give there a project name and corresponding scratch and project dirs)
+- implement auto direction always staging from where the script is evoked to the opposite location
 """
 from __future__ import print_function
 import os, sys, socket, subprocess, datetime
@@ -138,7 +142,7 @@ if __name__ == '__main__':
                                                  to lsw12 or scratch")
     parser.add_argument("path_or_filename",help="Path or filename to stage.", nargs="+")
     parser.add_argument("-p","--partner",choices=['scratch','lab','auto'],default='auto',help="staging partner (source/destination other than /project)")
-    parser.add_argument('-d',"--direction",default="in",choices=['in','out'],help="direction of staging (from or to project folder)")
+    parser.add_argument('-d',"--direction",default="auto",choices=['in','out','auto'],help="direction of staging (from or to project folder)")
     parser.add_argument("-m","--mode",choices=['non-exist','newer','force'],default='newer',help="Staging mode. Which files should be staged (only non existing, only newer or all.)")
     parser.add_argument("-t","--run-type",choices=['direct','submit','auto','dry_run'],default='auto',help='Decides wheter staging should be run on data mover node directly or through qsub. Default (auto) make choice depending on file size and number.')
     parser.add_argument("-j","--job-fname",default=None,help="Full filename of jobfile. By default it is put in ~/vervet_project/staging/...")
@@ -147,7 +151,7 @@ if __name__ == '__main__':
     parser.add_argument("-b","--project-base",default="vervet",type=str)
     parser.add_argument("--dry-run",action="store_true")
     parser.add_argument("-l","--local-print-file",default=None,type=str)
-    parser.add_argument("-v","--verbose",type=int,default=0)
+    parser.add_argument("-v","--verbose",type=int,default=1)
     args =  parser.parse_args()
 
 
@@ -155,13 +159,15 @@ if __name__ == '__main__':
         host = socket.gethostname()
         if host == 'gmi-lws12':
             partner = 'lab'
-        elif 'login' in host or dmn in host:
+        elif 'login' in host or 'dmn' in host:
             partner = 'scratch'
         else:
             raise Exception('"auto" staging partner determination only implemented for lws12 or mendel')
     else:
         partner = args.partner 
     
+    if args.direction == 'auto':
+        raise Exception('"auto" direction not implemented yet, specify -d in or -d out')
     
     possible_base_dirs = ['/projects/vervetmonkey/','/lustre/scratch/projects/vervetmonkey/','/net/gmi.oeaw.ac.at/nordborg/lab/Projects/vervetpopgen/']
     
@@ -170,7 +176,6 @@ if __name__ == '__main__':
     rel_fnames=[]
     for file in args.path_or_filename:
         real_path = os.path.realpath(file)
-        print(real_path)
         rel_fn = real_path
         for bd in possible_base_dirs:
             if real_path.startswith(bd):

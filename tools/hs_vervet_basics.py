@@ -60,7 +60,8 @@ def v_print(*text,**kwa):
         verbosity = 0
     try:
         file = kwa["file"]
-        try_make_dirs(os.path.split(file)[0])
+        if file is not None:
+            try_make_dirs(os.path.split(file)[0])
         del kwa["file"]
     except KeyError:
         file = None
