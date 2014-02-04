@@ -8,7 +8,7 @@ from hs_vervet_basics import v_print
 min_mcp_size = 500000000 
 min_qsub_size = 500000000
 
-def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_fn=None,name=None,afterok=None,afterany=None,startonhold=False,verbose=0,file_to_print_to=None):
+def stage(file_ls,source_base,target_base,mode,run_type='auto',ignore_ls=None,job_fn=None,out_fn=None,name=None,afterok=None,afterany=None,startonhold=False,verbose=0,file_to_print_to=None):
     # this function should only run on dmn,
     # where all file systems are seen
     #empty the file to print to (usually things are appended
@@ -23,6 +23,35 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
         """
         kwa.update({"file":file_to_print_to,"verbosity":verbose})
         v_print(*text,**kwa)
+
+    def add_if_newer(file,file_ls):
+        source_time = os.path.getmtime(os.path.join(source_base,file))
+        try:
+            target_time = os.path.getmtime(os.path.join(target_base,file))
+            if source_time > target_time:
+                file_ls.append(file)
+                vprint("Staging, source newer:"+file,mv=1)
+            else:
+                vprint("Not staging, not newer on source: "+file,mv=1)
+        except OSError:
+            file_ls.append(file)
+            vprint("Staging, not exist on target:"+file,mv=1)
+    
+    def add_if_not_exist(file,file_ls):
+        if not os.path.exists(os.path.join(os.path.expanduser(target_base),file)):
+            file_ls.append(file)
+
+    def add_if(file,file_ls):
+        for ign in ignore_ls:
+            if ign in file:
+                return
+        if mode == "newer":
+            add_if_newer(file,file_ls)
+        elif mode == "non-exist":
+            add_if_non_exist(file,file_ls)
+        elif mode == force:
+            file_ls.append(file)
+
     vprint("output of",__file__,mv=10)
 
 
@@ -32,6 +61,8 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
         afterany = []
     if afterok is None:
         afterok = []
+    if ignore_ls is None:
+        ignore_ls = []
 
     host = socket.gethostname()
     if 'dmn' not in host:
@@ -52,48 +83,54 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',job_fn=None,out_f
     if mode not in modes:
         raise ValueError('stage_mode must be in {}'.format(modes))
     
-    if mode == "non-exist":
-        #remove files from file-list that exist on target
-        nonexist_file_ls = [file for file in file_ls if not os.path.exists(os.path.join(os.path.expanduser(target_base),file))]
-        file_ls = nonexist_file_ls
+#    if mode == "non-exist":
+#        #remove files from file-list that exist on target
+#        nonexist_file_ls = [file for file in file_ls if not os.path.exists(os.path.join(os.path.expanduser(target_base),file))]
+#        file_ls = nonexist_file_ls
+#    
+#    #print('before:',file_ls)    
+#    vprint("staging form '" +source_base+"' to '" + target_base + "'",mv=1)
+#    vprint("staging mode: "+mode,mv=1)
+#    vprint("run type: "+run_type,mv=1)
+#    n_files = 0
+#    if mode == "newer":# and (run_type == 'direct' or run_type == 'auto'):
+#        #remove files from file-list that are newer on target than on source
+#        newer_on_source = []
+#        for file in file_ls:
+#            #print('from filelist:',file)
+#            if os.path.isdir(os.path.join(source_base,file)):
+#                #print('is a dir:',file)
+#                for root, _, fs in os.walk(os.path.join(source_base,file)):
+#                    #print('fs:',fs)
+#                    for f in fs:
+#                        #print('f:',f)
+#                        n_files+=1
+#                        add_if_newer(os.path.join(root[len(source_base)+1:],f),newer_on_source)
+#            else:
+#                n_files += 1
+#                add_if_newer(file,newer_on_source)
+#        vprint("Staging " + str(len(newer_on_source)) + " out of " + str(n_files) + " files." ,mv=1)
+#        file_ls = newer_on_source
     
-    #print('before:',file_ls)    
-    vprint("staging form '" +source_base+"' to '" + target_base + "'",mv=1)
-    vprint("staging mode: "+mode,mv=1)
-    vprint("run type: "+run_type,mv=1)
+
+    #walk through the directories and decide whether to add the files
+    #TODO: incorporate the size check into the function here! Then only one loop is necessary...
     n_files = 0
-    if mode == "newer" and (run_type == 'direct' or run_type == 'auto'):
-        #remove files from file-list that are newer on target than on source
-        def add_if_newer(file,file_ls):
-            source_time = os.path.getmtime(os.path.join(source_base,file))
-            try:
-                target_time = os.path.getmtime(os.path.join(target_base,file))
-                if source_time > target_time:
-                    file_ls.append(file)
-                    vprint("Staging, source newer:"+file,mv=1)
-                else:
-                    vprint("Not staging, not newer on source: "+file,mv=1)
-            except OSError:
-                file_ls.append(file)
-                vprint("Staging, not exist on target:"+file,mv=1)
-        newer_on_source = []
-        for file in file_ls:
-            #print('from filelist:',file)
-            if os.path.isdir(os.path.join(source_base,file)):
-                #print('is a dir:',file)
-                for root, _, fs in os.walk(os.path.join(source_base,file)):
-                    #print('fs:',fs)
-                    for f in fs:
-                        #print('f:',f)
-                        n_files+=1
-                        add_if_newer(os.path.join(root[len(source_base)+1:],f),newer_on_source)
-            else:
-                n_files += 1
-                add_if_newer(file,newer_on_source)
-        vprint("Staging " + str(len(newer_on_source)) + " out of " + str(n_files) + " files." ,mv=1)
-        file_ls = newer_on_source
-    
-    #print('after',file_ls)    
+    retained_files = []
+    for file in file_ls:
+        if os.path.isdir(os.path.join(source_base,file)):   
+            for root, _, fs in os.walk(os.path.join(source_base,file)):
+                #print('fs:',fs)
+                for f in fs:
+                    #print('f:',f)
+                    n_files+=1
+                    rel_path = root[len(source_base)+1:]
+                    add_if(os.path.join(rel_path,f),retained_files)
+        else:
+            n_files += 1
+            add_if(file,retained_files)         
+    vprint("Staging " + str(len(retained_files)) + " out of " + str(n_files) + " files." ,mv=1)
+    file_ls = retained_files
 
     if not file_ls:
         vprint("Nothing to stage in mode {0}".format(mode))

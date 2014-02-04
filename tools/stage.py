@@ -125,8 +125,8 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
    #     if err is not None:    
    #         print('dmn_stage.py','err:',err, file=sys.stderr)
 
-    vprint('dmn_stage.py out: ' + out,mv=1)
-    vprint('dmn_stage.py err: ' + err,mv=1)
+    vprint('dmn_stage.py out: ' + out.strip(),mv=1)
+    vprint('dmn_stage.py err: ' + err.strip(),mv=1)
     return out, err, rc            
        
 
