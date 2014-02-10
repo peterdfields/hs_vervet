@@ -7,7 +7,6 @@ If something is missing here, copy it from hs_vervet_basics_old.py.
 """
 from __future__ import print_function
 import os,gzip,re
-import numpy as np
 
 from ast import literal_eval
 
@@ -105,6 +104,7 @@ def read_genotype(fname,*args,**kwargs):
     
 def read_metadata(fname,*args,**kwargs):
     import pandas as pd
+    import numpy as np
     df1=pd.read_csv(fname,sep='\t',index_col=0,*args,**kwargs)
     for allele in ['ALT','REF']:
         parsed=df1[allele].apply(lambda s: list(s.replace('[','').replace(']','')))

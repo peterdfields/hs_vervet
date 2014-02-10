@@ -279,7 +279,7 @@ class Analysis(BaseClass):
 
 class Step(BaseClass):
 
-    def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, description=None, depend_steps=None, stagein=True, stageout=True, default_run=None,  check_date_input = True, verbose = None):
+    def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, description=None, depend_steps=None, stagein=True, stageout=True, stage_analysis_dir=True, default_run=None,  check_date_input = True, verbose = None):
         # the next to lines are just for the following methods to work
         # the attributes will be set again by their constructors
         self.name = name
@@ -419,7 +419,8 @@ class Step(BaseClass):
         for job in self.jobs:
             job.write_jobscript()
         if self.stageout_job is not None:
-            self.stageout_job.stage(run_type='dry_run')
+            self.stageout_job.write_prepare_jobscript()
+            #self.stageout_job.stage(run_type='dry_run')
 
     def scratch_run(self,parallel=False,nprocs='auto'):
         if self.stagein_job is not None:
@@ -652,7 +653,6 @@ class Job(BaseClass):
         self.output_files += job.output_files
         if self.step is not None:
             self.step.jobs.remove(job)
-
     
     def ran_noerror(self):
         f = os.path.expanduser(self.oe_fn+'.e')
@@ -999,7 +999,7 @@ class JoinedJob(Job):
 
 
 class StageJob(Job):
-    def __init__(self,  direction, files=None, step=None, stage_analysis_dir=True, mode='newer',depends=None, description=None,  verbose=None, debug=False):
+    def __init__(self,  direction, files=None, step=None, stage_analysis_dir=None, mode='newer',depends=None, description=None,  verbose=None, debug=False):
         if direction not in ['in','out']:
             raise ValueError('direction should be "in" or "out" but is {}'.format(direction))
         self.direction = direction
@@ -1037,6 +1037,9 @@ class StageJob(Job):
             elif self.direction == 'out':
                 self.source = step.analysis.scratch
                 self.target = step.analysis.project
+        if self.stage_analysis_dir is None:
+            self.stage_analysis_dir = step.stage_analysis_dir
+
             
         self.id = 'stg' + self.direction + '_'  + hid
         Job.bind_to_step(self,step)
@@ -1061,8 +1064,8 @@ class StageJob(Job):
             wait = False
             start_on_hold = False        
 
-        if self.depends:
-            raise Exception('Dependencies not implemented for stage job in "stage".')        
+        if self.depends and self.step.run_type=='qsub':
+            raise Exception('Dependencies not implemented for stage job in "stage" use qsub_prepare_jobscript.')        
 
         self.vprint("staging",self.name,"in mode",run_type,mv=1)
         
@@ -1105,7 +1108,7 @@ class StageJob(Job):
         else:
             hold = ""
         stage_command = "dmn_stage.py -m {mode} -t {run_type} -v {verbose} -j {job_fn} -o {oe_fn}" \
-                        " -n {job_name} -l {print_to} {hold}{source} {target} {files}".format(
+                        " -n {job_name} -l {print_to} {hold}{source} {target} {files} -i '/_data/'".format(
                         mode=self.mode,run_type=run_type,verbose=self.verbose,job_fn=self.file_name,
                         oe_fn=self.oe_fn,
                         job_name=self.job_name,print_to=self.oe_fn+"_prep_dmn.o", hold=hold,

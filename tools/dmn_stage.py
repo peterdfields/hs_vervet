@@ -43,8 +43,13 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',ignore_ls=None,jo
 
     def add_if(file,file_ls):
         for ign in ignore_ls:
+            #try:
             if ign in file:
+                vprint("Not staging, matching ignore pattern {}: ".format(ign)+file,mv=1)
                 return
+            #except:
+            #    print("ign, file:",ign, file)
+            #    raise
         if mode == "newer":
             add_if_newer(file,file_ls)
         elif mode == "non-exist":
@@ -216,8 +221,8 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',ignore_ls=None,jo
     #    if err is not None:    
     #        print(job_fn,'err:',err,file=sys.stderr)
     
-    vprint('stage job out: ' + out,mv=1)
-    vprint('stage job err: ' + err,mv=1)
+    vprint('stage job out: ' + out.strip(),mv=1)
+    vprint('stage job err: ' + err.strip(),mv=1)
 
     return (out, err, rc)
 
@@ -323,11 +328,14 @@ if __name__ == '__main__':
     parser.add_argument("-H","--start-on-hold",action="store_true",help='Start the job on user hold. Only effective if run type is submit.')
     parser.add_argument("-v","--verbose",type=int,default=0)
     parser.add_argument("-l","--local-print-file",default=None,type=str)
+    parser.add_argument("-i","--ignore",nargs="*",action="store",default=None)
     parser.add_argument("path_or_filename",help="Path or filename to stage.", nargs="+")
     
     args = parser.parse_args()
-
-    (out, err, rc) = stage(args.path_or_filename,args.source_base,args.target_base,args.mode,run_type=args.run_type,afterok=args.afterok,afterany=args.afterany,startonhold=args.start_on_hold,job_fn=args.job_fname,out_fn=args.stdout_fname,name=args.job_name,file_to_print_to=args.local_print_file,verbose=args.verbose)
+    
+    #print("ignore",args.ignore)
+    #sys.exit(1)
+    (out, err, rc) = stage(args.path_or_filename,args.source_base,args.target_base,args.mode,run_type=args.run_type,ignore_ls=args.ignore,afterok=args.afterok,afterany=args.afterany,startonhold=args.start_on_hold,job_fn=args.job_fname,out_fn=args.stdout_fname,name=args.job_name,file_to_print_to=args.local_print_file,verbose=args.verbose)
 
     
     #print('in main of dmn_stage,rc:',rc)
