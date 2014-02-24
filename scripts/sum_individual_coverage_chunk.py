@@ -15,32 +15,24 @@ parser.add_argument("-o","--out",default=sys.stdout,help="Output filename. (defa
 
 args = parser.parse_args()
 
-def get_absolute_path(fn):
-    if fn[0]=='/':
-        return fn
-    else:
-        return os.path.join(os.getcwd(),fn)
+
+coverage_file1 = os.path.abspath(args.file1[0]) 
 
 
-coverage_file1 = get_absolute_path(args.file1[0]) 
+coverage_files = [os.path.abspath(fn) for fn in args.file2]
 
 
-coverage_files = [get_absolute_path(fn) for fn in args.file2]
-
-
-total = pd.read_csv(coverage_file1,sep='\t',index_col=[0,1],header=None)
+tp = pd.read_csv(coverage_file1,sep='\t',index_col=[0,1],header=None,iterator=True, chunksize=1000)
+total = pd.concat(tp, ignore_index=True)
 
 for file in coverage_files:
-    series = pd.read_csv(file,sep='\t',index_col=[0,1],header=None)
+    tp1 = pd.read_csv(file,sep='\t',index_col=[0,1],header=None,iterator=True, chunksize=1000)
+    series = pd.concat(tp1, ignore_index=True)
     total = total.add(series,fill_value=0).astype(int)
     del series
     gc.collect()
 
 
-total.to_csv(args.out,sep='\t',header=None)
-
-del total
-
-gc.collect()
+total.to_csv(os.path.abspath(args.out),sep='\t',header=None)
 
 sys.exit(0)

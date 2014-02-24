@@ -26,9 +26,12 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',ignore_ls=None,jo
 
     def add_if_newer(file,file_ls):
         source_time = os.path.getmtime(os.path.join(source_base,file))
+        #vprint("source:",os.path.join(source_base,file), source_time,mv=1)
         try:
             target_time = os.path.getmtime(os.path.join(target_base,file))
-            if source_time > target_time:
+            #vprint("target:",os.path.join(target_base,file),target_time,mv=1)
+            #The int conversion is necessary, cause the 
+            if int(source_time) > int(target_time):
                 file_ls.append(file)
                 vprint("Staging, source newer:"+file,mv=1)
             else:
@@ -53,7 +56,7 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',ignore_ls=None,jo
         if mode == "newer":
             add_if_newer(file,file_ls)
         elif mode == "non-exist":
-            add_if_non_exist(file,file_ls)
+            add_if_not_exist(file,file_ls)
         elif mode == force:
             file_ls.append(file)
 
@@ -253,7 +256,7 @@ def write_jobscript(file_ls,source_base,destination_base,mode,method='mcp',job_f
         raise ValueError('stage_mode must be in {}'.format(modes))
 
     if method == 'cp':
-        options = 'rp'    
+        options = 'a'    
         if mode == 'non-exist':
             options += 'n'
         elif mode == 'newer':
@@ -276,7 +279,7 @@ def write_jobscript(file_ls,source_base,destination_base,mode,method='mcp',job_f
         cp -{options} --parents {source} {destination_base}/
         """.format(name=name,out_fn=out_fn,source_base=source_base,options=options,source=' '.join([f for f in file_ls]),destination_base=destination_base))
     elif method == 'mcp':
-        options = 'rp'    
+        options = 'a'    
         if mode == 'non-exist':
             options += 'n'
         elif mode == 'newer':

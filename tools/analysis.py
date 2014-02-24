@@ -679,10 +679,10 @@ class Job(BaseClass):
             header += "#exit on error\n"
             header += "set -e\n"
         header += pretty_comment(self.analysis.description,"analysis: "+self.analysis.name,'=')
-        header += 'if [ -n "$PBS_ENVIRONMENT" ]; then\n'
-        header += 'PROJECT_HOME=' + self.analysis.scratch + '\n'
-        header += 'else\n'
+        header += 'if [ "$1" = "project" ]; then\n'
         header += 'PROJECT_HOME=' + self.analysis.project + '\n'
+        header += 'else\n'
+        header += 'PROJECT_HOME=' + self.analysis.scratch + '\n'
         header += 'fi\n'
         return header
 
@@ -1287,16 +1287,16 @@ class Command(object):
 if __name__ == '__main__':
     import argparse, json
 
-    config_example = {"default_project": "vervet", "projects": {"test": {"scratch_dir": "test_scratch", "lab_dir": "test_lab", "project_name": "vervetmonkey", "project_dir": "test_project"}, "vervet": {"scratch_dir": "~/vervet_scratch", "lab_dir": "~/vervet_lab", "project_name": "vervetmonkey", "project_dir": "~/vervet_project"}}}    
+#   config_example = {"default_project": "vervet", "projects": {"test": {"scratch_dir": "test_scratch", "lab_dir": "test_lab", "project_name": "vervetmonkey", "project_dir": "test_project"}, "vervet": {"scratch_dir": "~/vervet_scratch", "lab_dir": "~/vervet_lab", "project_name": "vervetmonkey", "project_dir": "~/vervet_project"}}}    
 
-    try:
-        with open("analysis.config",'rb') as conf:
-            default_dict = json.load(conf)
-        print "defaults loaded updated from analysis.config."
-    except IOError,e:
-        raise Exception("analysis.config could not be loaded, make sure that the file exists in the same " \
-                        "directory as analysis.py and that is it of the form {}. " \
-                        "The error is: {}".format(config_example,e.message)) 
+#    try:
+#        with open("analysis.config",'rb') as conf:
+#            default_dict = json.load(conf)
+#        print "defaults loaded updated from analysis.config."
+#    except IOError,e:
+#        raise Exception("analysis.config could not be loaded, make sure that the file exists in the same " \
+#                        "directory as analysis.py and that is it of the form {}. " \
+#                        "The error is: {}".format(config_example,e.message)) 
       
     
 
@@ -1309,18 +1309,18 @@ if __name__ == '__main__':
                                             "of such a dict.")        
     parser.add_argument("name",help="Name of the analysis (not including date).")
     parser.add_argument("--date",default=datetime.datetime.strftime(datetime.datetime.now(),"%Y%m%d"),help="This date is added to the analysis name and folder. Should be YYYYMMDD. Default is today.")        
-    parser.add_argument('-p','--project',default=None,help="Project to which this analysis belongs. If not specified the default from analysis.config is used.")
+    parser.add_argument('-p','--project',default=None,help="Project to which this analysis belongs. If not specified the default provided in analysis.rc is used.")
     #parser.add_argument("--project_dir",default=None,help="The base directory in which the project will be created. To have the same path on cluster and workstation, you can use a symbolic link of the form '~/project_dir' that points to the real project location.")
     #parser.add_argument("--scratch_dir",default=None,help="Equivalent of <project_dir>. Location on the lustre file system to which analysis is staged.")
     #parser.add_argument("--project_name",default=None,help="Name of the project. This must be the name used in the PBS accounting system as supplied with qsub -N <project_name>.")       
-    parser.add_argument("--config-example",help="Print an example of the content of the analysis.config file and exit.",action="store_true")       
+#    parser.add_argument("--config-example",help="Print an example of the content of the analysis.config file and exit.",action="store_true")       
     #parser.add_argument("--library_dir",default=None,help="Path to the analysis python module. Usually this is the directory in which this script resides. Avoid tilde expansion with single quotes to keep the generic ~, e.g. --library_dir '~/script'. (This applies if you want to run the analysis on different systems, such as cluster and workstation.)")
                     
     args = parser.parse_args() 
     
-    if args.config_example:
-        print config_example
-        sys.exit(0)
+#    if args.config_example:
+#        print config_example
+#        sys.exit(0)
 
 
     if args.project is not None:
