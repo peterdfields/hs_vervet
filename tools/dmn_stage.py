@@ -9,6 +9,7 @@ min_mcp_size = 500000000
 min_qsub_size = 500000000
 
 def stage(file_ls,source_base,target_base,mode,run_type='auto',ignore_ls=None,job_fn=None,out_fn=None,name=None,afterok=None,afterany=None,startonhold=False,verbose=0,file_to_print_to=None):
+    #print("file_ls:",file_ls)
     # this function should only run on dmn,
     # where all file systems are seen
     #empty the file to print to (usually things are appended
@@ -25,6 +26,7 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',ignore_ls=None,jo
         v_print(*text,**kwa)
 
     def add_if_newer(file,file_ls):
+        #print(file)
         source_time = os.path.getmtime(os.path.join(source_base,file))
         #vprint("source:",os.path.join(source_base,file), source_time,mv=1)
         try:
@@ -126,6 +128,7 @@ def stage(file_ls,source_base,target_base,mode,run_type='auto',ignore_ls=None,jo
     n_files = 0
     retained_files = []
     for file in file_ls:
+        #print("file:",file)
         if os.path.isdir(os.path.join(source_base,file)):   
             for root, _, fs in os.walk(os.path.join(source_base,file)):
                 #print('fs:',fs)
@@ -332,10 +335,24 @@ if __name__ == '__main__':
     parser.add_argument("-v","--verbose",type=int,default=0)
     parser.add_argument("-l","--local-print-file",default=None,type=str)
     parser.add_argument("-i","--ignore",nargs="*",action="store",default=None)
-    parser.add_argument("path_or_filename",help="Path or filename to stage.", nargs="+")
+    parser.add_argument("path_or_filename",default=None,help="Path or filename to stage.", nargs="*")
+    parser.add_argument("-L","--file_list",default=None,help="Path to a list of files to stage.")
     
     args = parser.parse_args()
     
+    if args.path_or_filename is None: 
+        args.path_or_filename = []
+    if args.file_list is None:
+        args.file_list = ""
+
+    if not args.path_or_filename and not args.file_list:
+        raise parser.error("Either <path_or_filename> or --file_list <file_list> have to be specified.")
+    
+    if args.file_list:
+        args.path_or_filename += [line.strip() for line in open(args.file_list, 'r')]
+
+    #print("path_or_fn:",args.path_or_filename)
+
     #print("ignore",args.ignore)
     #sys.exit(1)
     (out, err, rc) = stage(args.path_or_filename,args.source_base,args.target_base,args.mode,run_type=args.run_type,ignore_ls=args.ignore,afterok=args.afterok,afterany=args.afterany,startonhold=args.start_on_hold,job_fn=args.job_fname,out_fn=args.stdout_fname,name=args.job_name,file_to_print_to=args.local_print_file,verbose=args.verbose)

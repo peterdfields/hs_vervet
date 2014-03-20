@@ -104,7 +104,7 @@ only offer 1,3,5,6?
 The analysis.config should be read by the analysis directly at runtime!??
 
 """
-import sys, os, datetime, subprocess, socket, filecmp, shutil
+import sys, os, datetime, subprocess, socket, filecmp, shutil, warnings
 sys.path.insert(0, os.path.expanduser('~/lib/python'))
 sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
 from hs_vervet.tools import hs_vervet_basics as hvb
@@ -129,9 +129,11 @@ def pretty_comment(comment,title,sep='-'):
     body += "#" + sep*(fill_to-1) + '\n'
     return head+body
 
-def make_ana_dirs(base_dir,ana_dir):
+def make_ana_dirs(project,ana_dir):
     for direc in ["_data","log","script","jobscript","io","output"]:
-        hvb.try_make_dirs(os.path.join(base_dir,ana_dir,direc))
+        hvb.try_make_dirs(os.path.join("~/{}_project".format(project),ana_dir,direc))
+    for direc in ["_data","output"]:
+        hvb.try_make_dirs(os.path.join("~/{}_scratch".format(project),ana_dir,direc))
 
 def is_cluster():
     #check whether on mendel
@@ -145,10 +147,39 @@ def value_check(el,lst):
     if el not in lst:
         raise ValueError("Argument must be in {0} but is {1}".format(lst,el))
 
-def create_cluster_ana_folder(project_dir,ana_dir):
-            command = '''ssh dmn.mendel.gmi.oeaw.ac.at nohup "python -c 'from hs_vervet.tools.analysis import make_ana_dirs; make_ana_dirs(\\"{}\\",\\"{}\\")'"'''.format(project_dir,ana_dir)
-            #print 'bla:',command
-            subprocess.Popen(command,shell=True)
+def chmod(file):
+    p = subprocess.call(['chmod','ug+x',os.path.expanduser(file)])
+
+
+def query_yes_no(question, default="yes"):
+    """Ask a yes/no question via raw_input() and return their answer.
+      "question" is a string that is presented to the user.
+      "default" is the presumed answer if the user just hits <Enter>.
+      It must be "yes" (the default), "no" or None (meaning
+      an answer is required of the user).
+      The "answer" return value is one of "yes" or "no".
+    """
+    valid = {"yes":True,   "y":True,  "ye":True,
+             "no":False,     "n":False}
+    if default == None:
+        prompt = " [y/n] "
+    elif default == "yes":
+        prompt = " [Y/n] "
+    elif default == "no":
+        prompt = " [y/N] "
+    else:
+        raise ValueError("invalid default answer: '%s'" % default)
+    
+    while True:
+        sys.stdout.write(question + prompt)
+        choice = raw_input().lower()
+        if default is not None and choice == '':
+            return valid[default]
+        elif choice in valid:
+            return valid[choice]
+        else:
+            sys.stdout.write("Please respond with 'yes' or 'no' "\
+                            "(or 'y' or 'n').\n")
 
 class BaseClass(object):
     """
@@ -198,32 +229,46 @@ class Analysis(BaseClass):
     analysis.run_all()
     consistent local and mendel usage with optionall staging...
     """
-    def __init__(self, name, default_run = None, project_dir="~/vervet_project",scratch_dir="~/vervet_scratch",lab_dir="~/vervet_lab",project_name="vervetmonkey",description=None,verbose=0):
+    def __init__(self, name, project,mendel_project=None,
+                    default_run = None,description=None,verbose=0):
+                #,
+                #these options are depreciated, use the arguments above
+                #project_dir="~/vervet_project",
+                #scratch_dir="~/vervet_scratch",
+                #lab_dir="~/vervet_lab",
+                #project_name="vervetmonkey"):
 
+        #get filename of calling script
         callingframe = sys._getframe(1)
         c = callingframe.f_locals["__file__"]
         self.calling_fn = os.path.join(os.getcwdu(),
                 (c if c[:2]!='./' else c[2:]))
         self.name = name
         self.host = 'cluster' if is_cluster() else 'workstation'
+
+        self.mendel_project = (mendel_project if mendel_project is not None else project)
+
         if default_run is None:
             if self.host == 'cluster':
                 default_run = 'qsub'
             elif self.host == 'workstation':
                 default_run = 'scratch_run'
+
         default_runs = ['qsub','scratch_run','project_run','write_jobscripts']
         value_check(default_run, default_runs)
+
         self.default_run = default_run
         #print self.default_run
-        self.scratch = scratch_dir
-        self.project =  project_dir
-        self.lab_dir = lab_dir
-        self.project_name = project_name 
+        self.scratch = "~/{}_scratch".format(project)
+        self.project = "~/{}_project".format(project)
+        self.lab_dir = "~/{}_lab".format(project)
         self.description = (description if description is not None else '')
         self.ana_dir = os.path.join('analyses/',self.name)
-        self.submit_log_fn = os.path.join(self.project,self.ana_dir,'log/', self.name+"_submit_log.txt") 
-        make_ana_dirs(self.project,self.ana_dir)
-        make_ana_dirs(self.scratch,self.ana_dir)
+
+        self.submit_log_fn = os.path.join(self.project,self.ana_dir,'log/', self.name+"_submit_log.txt")
+
+        make_ana_dirs(project,self.ana_dir)
+
         self.steps=[]
         try:
             shutil.copy(self.calling_fn,os.path.join(os.path.expanduser(self.project),
@@ -234,9 +279,7 @@ class Analysis(BaseClass):
             else:
                 raise
         self.verbose = verbose
-            
-            
-            
+
         #subprocess.Popen("cd {}/script/hs_vervet && git pull origin master".format(self.scratch),shell=True)
 
     def append_step(self, step):
@@ -272,14 +315,11 @@ class Analysis(BaseClass):
         js = JoinedStep(steps,name,self,join_jobs_on=join_jobs_on)
         self.steps = self.steps[:pos] + [js] + self.steps[pos+len(steps):]       
         return js
-            
-            
-    
 
 
 class Step(BaseClass):
 
-    def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, description=None, depend_steps=None, stagein=True, stageout=True, stage_analysis_dir=True, default_run=None,  check_date_input = True, verbose = None):
+    def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, description=None, depend_steps=None, stagein=True, stageout=True, stage_analysis_dir=False, default_run=None,  check_date_input = True, verbose = None):
         # the next to lines are just for the following methods to work
         # the attributes will be set again by their constructors
         self.name = name
@@ -498,7 +538,15 @@ class Step(BaseClass):
             for job in self.jobs:
                 while self.stagein_job in job.depends:
                     job.depends.remove(self.stagein_job)
-        stagein_job = StageJob(direction='in',files=in_files,step=self,stage_analysis_dir=stage_analysis_dir)
+        if len(in_files) <= 20:
+            stagein_job = StageJob(direction='in',files=in_files,step=self,stage_analysis_dir=stage_analysis_dir)
+        else:
+            in_fn = os.path.join(os.path.expanduser(self.analysis.project),self.analysis.ana_dir,"io",self.name+".in")
+            with open(in_fn,'w') as f:
+                for line in in_files:
+                    f.write(line+"\n")
+            stagein_job = StageJob(direction='in',file_list=in_fn,step=self,stage_analysis_dir=stage_analysis_dir)
+
         for job in self.jobs:
             job.depends.append(stagein_job)
         self.stagein_job = stagein_job
@@ -563,9 +611,8 @@ class JoinedStep(Step):
 
 
 
- 
 class Job(BaseClass):
-    def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, step = None, analysis_step = None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='04:00:00',ncpus=1, mem=None, exit_on_error=True, description=None, debug=False, verbose=None):
+    def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, step = None, analysis_step = None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='04:00:00',ncpus=1,pbs_lines=None, mem=None, exit_on_error=True, description=None, debug=False, verbose=None):
         self.depends = ([] if depends is None else depends)
         self.input_files = ([] if input_files is None else input_files)
         self.output_files = ([] if output_files is None else output_files)
@@ -577,6 +624,7 @@ class Job(BaseClass):
         self.exit_on_error = exit_on_error
         self.description = (description if description is not None else '')
         self.verbose = verbose
+        self.pbs_lines = ([] if pbs_lines is None else pbs_lines)
         if mem is None:
             self.mem = str(ncpus * 3825) + 'mb'
         else:
@@ -666,7 +714,7 @@ class Job(BaseClass):
         header = ''  
         header += "#!/usr/bin/env bash\n"
         header += "#PBS -N {}\n".format(self.job_name)
-        header += "#PBS -P {}\n".format(self.analysis.project_name)
+        header += "#PBS -P {}\n".format(self.analysis.mendel_project)
         if self.debug:
             header += "#PBS -q debug\n"
         else:
@@ -675,6 +723,8 @@ class Job(BaseClass):
             header += "#PBS -l walltime={}\n".format(self.walltime)
             header += "#PBS -o {}.o\n".format(os.path.expanduser(self.oe_fn))
             header += "#PBS -e {}.e\n".format(os.path.expanduser(self.oe_fn))
+            for line in self.pbs_lines:
+                header += "#PBS " + line + "\n"
         if self.exit_on_error:
             header += "#exit on error\n"
             header += "set -e\n"
@@ -956,6 +1006,8 @@ class JoinedJob(Job):
         else:
             self.walltime = walltime
 
+        self.pbs_lines = list(set(reduce(lambda x,y: x+y,[job.pbs_lines for job in jobs])))
+
         if not id:
             if not all(job.id == jobs[0].id for job in jobs):
                 raise Exception("Jobs don't have same id. Provide id for JoinedStep in this case! IDs: "+str([job.id for job in jobs]))
@@ -963,7 +1015,8 @@ class JoinedJob(Job):
                 self.id = jobs[0].id
         else:
             self.id = id
-        
+
+
         #output and input files are the union of those of the jobs to be joined
         self.input_files = list(set(reduce(lambda x,y: x+y,[job.input_files for job in jobs])))    
         self.output_files = list(set(reduce(lambda x,y: x+y,[job.output_files for job in jobs])))    
@@ -999,11 +1052,13 @@ class JoinedJob(Job):
 
 
 class StageJob(Job):
-    def __init__(self,  direction, files=None, step=None, stage_analysis_dir=None, mode='newer',depends=None, description=None,  verbose=None, debug=False):
+    def __init__(self,  direction, files=None, file_list=None,  step=None, stage_analysis_dir=None, mode='newer',depends=None, description=None,  verbose=None, debug=False):
         if direction not in ['in','out']:
             raise ValueError('direction should be "in" or "out" but is {}'.format(direction))
         self.direction = direction
         self.files = ([] if files is None else files)
+        #file_list is a file containing filenames
+        self.file_list = file_list
         self.depends = ([] if depends is None else depends)
         self.debug = debug
         self.stage_analysis_dir = stage_analysis_dir
@@ -1072,9 +1127,10 @@ class StageJob(Job):
         stage_command = self.stage_command(run_type,start_on_hold=start_on_hold)
         if "dmn" not in self.analysis.host:
             stage_command = "ssh dmn.mendel.gmi.oeaw.ac.at nohup " + stage_command
-        
+        #s = stage_command.split()
+        #print s
+        #print stage_command
         p = subprocess.Popen(stage_command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        
         out, err = p.communicate()
         self.returncode = p.returncode
 
@@ -1086,7 +1142,7 @@ class StageJob(Job):
         self.vprint("err is:",err,mv=2)
         
         #naive check whether a job was submitted
-        if 'login' in out:
+        if out is not None and 'login' in out:
             self.pbs_id = out.strip()
             self.vprint("Submitted",self.name,"with job ID",self.pbs_id,mv=1)
             if wait:
@@ -1107,13 +1163,14 @@ class StageJob(Job):
             hold = "-H "
         else:
             hold = ""
+        lst = ("--file_list " +  self.file_list) if self.file_list is not None else ""
         stage_command = "dmn_stage.py -m {mode} -t {run_type} -v {verbose} -j {job_fn} -o {oe_fn}" \
-                        " -n {job_name} -l {print_to} {hold}{source} {target} {files} -i '/_data/'".format(
+                        " -n {job_name} -l {print_to} {hold}{source} {target} {files} {lst} -i '/_data/'".format(
                         mode=self.mode,run_type=run_type,verbose=self.verbose,job_fn=self.file_name,
                         oe_fn=self.oe_fn,
                         job_name=self.job_name,print_to=self.oe_fn+"_prep_dmn.o", hold=hold,
                         source=self.source,target=self.target,
-                        files=" ".join(self.files))
+                        files=" ".join(self.files),lst=lst)
 
         return stage_command
         
@@ -1144,7 +1201,7 @@ class StageJob(Job):
             jf.write("#PBS -l walltime={0}\n".format(walltime))
             jf.write("module load Python/2.7.3-goolf-1.4.10\n")
             stage_command = self.stage_command()
-                        
+
             commands = ["if [[ `hostname -s` = dmn* ]]; then","echo already at dmn",
                         stage_command,
                         "else","echo ssh to dmn",
@@ -1285,7 +1342,7 @@ class Command(object):
         file.write(self.command)
 
 if __name__ == '__main__':
-    import argparse, json
+    import argparse
 
 #   config_example = {"default_project": "vervet", "projects": {"test": {"scratch_dir": "test_scratch", "lab_dir": "test_lab", "project_name": "vervetmonkey", "project_dir": "test_project"}, "vervet": {"scratch_dir": "~/vervet_scratch", "lab_dir": "~/vervet_lab", "project_name": "vervetmonkey", "project_dir": "~/vervet_project"}}}    
 
@@ -1301,45 +1358,43 @@ if __name__ == '__main__':
     
 
 
-    parser=argparse.ArgumentParser(description="Initialise an new analysis. " \
-                                            "Default arguments can be supplied " \
-                                            "in a file analysis.config, "\
-                                            'which is a json dict. '\
-                                            "Use the option --config-example to get an example " \
-                                            "of such a dict.")        
+    parser=argparse.ArgumentParser(description="Initialise a new analysis.")
+                                            #"Default arguments can be supplied " \
+                                            #"in a file analysis.config, "\
+                                            #'which is a json dict. '\
+                                            #"Use the option --config-example to get an example " \
+                                            #"of such a dict.")        
     parser.add_argument("name",help="Name of the analysis (not including date).")
-    parser.add_argument("--date",default=datetime.datetime.strftime(datetime.datetime.now(),"%Y%m%d"),help="This date is added to the analysis name and folder. Should be YYYYMMDD. Default is today.")        
-    parser.add_argument('-p','--project',default=None,help="Project to which this analysis belongs. If not specified the default provided in analysis.rc is used.")
-    #parser.add_argument("--project_dir",default=None,help="The base directory in which the project will be created. To have the same path on cluster and workstation, you can use a symbolic link of the form '~/project_dir' that points to the real project location.")
-    #parser.add_argument("--scratch_dir",default=None,help="Equivalent of <project_dir>. Location on the lustre file system to which analysis is staged.")
-    #parser.add_argument("--project_name",default=None,help="Name of the project. This must be the name used in the PBS accounting system as supplied with qsub -N <project_name>.")       
-#    parser.add_argument("--config-example",help="Print an example of the content of the analysis.config file and exit.",action="store_true")       
-    #parser.add_argument("--library_dir",default=None,help="Path to the analysis python module. Usually this is the directory in which this script resides. Avoid tilde expansion with single quotes to keep the generic ~, e.g. --library_dir '~/script'. (This applies if you want to run the analysis on different systems, such as cluster and workstation.)")
-                    
+    parser.add_argument("--date",default=datetime.datetime.strftime(datetime.datetime.now(),"%Y%m%d"),
+                       help="This date is added to the analysis name and folder. Should be YYYYMMDD. Default is today.")
+    parser.add_argument('project',
+            help="Project to which this analysis belongs. Assumes that folders ~/<project>_project and ~/<project>_scratch exist, "\
+                 "can be symlinks.")
+    parser.add_argument('-b','--mendel_project',default=None,
+            help="Specifies the value of project used for billing within PBS, i.e. the -p option when submitting jobs to PBS. "\
+            "Default is same as project.")
     args = parser.parse_args() 
+
+
+    date_name = args.date + '_' + args.name
+    ana_dir = os.path.join('analyses', date_name)
+
+    #if args.mendel_project is None:
+    #    args.mendel_project = args.project
     
-#    if args.config_example:
-#        print config_example
-#        sys.exit(0)
-
-
-    if args.project is not None:
-        d =  default_dict['projects'][args.project]
-    else:
-        d = default_dict['projects'][default_dict["default_project"]] 
-
-    ana_dir = os.path.join('analyses',args.date + '_' + args.name)
 
     #create analysis directories:     
-    make_ana_dirs(d['project_dir'],ana_dir)
-    print "creating project dir:"
-    print os.path.join(d['project_dir'],ana_dir)
-    make_ana_dirs(d['scratch_dir'],ana_dir)
-    print "creating scratch dir:"
-    print os.path.join(d['scratch_dir'],ana_dir)
+    for loc in ["project","scratch"]:
+        base_dir = os.path.expanduser("~/{}_{}".format(args.project,loc))
+        if not os.path.exists(base_dir):
+            warnings.warn(base_dir + " does not exist.")
+            if not query_yes_no("Do you want to creat it?"):
+                raise UserException(base_dir + " does not exist. Pls create it. Can be symlink to real location.")
+
+    make_ana_dirs(args.project,ana_dir)
 
     #create the anaylsis file
-    fn = os.path.expanduser(os.path.join(d['project_dir'],ana_dir,'script',args.name+'.py'))
+    fn = os.path.expanduser(os.path.join("~/{}_project".format(args.project),ana_dir,'script',args.name+'.py'))
     ana_str = "#!/usr/bin/env python\n"
     ana_str += "#imports\n"
     #ana_str += "#add the location of the analysis module to the python path\n"
@@ -1350,7 +1405,10 @@ if __name__ == '__main__':
     ana_str += "#optional: set some global varialbes here\n"
     ana_str += "\n"
     ana_str += "#create the analysis object\n"
-    ana_str += "analysis = ana.Analysis(name='{}',project_dir='{}',scratch_dir='{}',project_name='{}')\n".format(args.date + '_' + args.name,d['project_dir'],d['scratch_dir'],d['project_name'])
+    if args.mendel_project is not None:
+        ana_str += "analysis = ana.Analysis(name='{}',project='{}',mendel_project='{}')\n".format(date_name,args.project,args.mendel_project)
+    else:
+        ana_str += "analysis = ana.Analysis(name='{}',project='{}')\n".format(date_name,args.project)
     #make an additional arguments that allows to write some job and step examples to the file ..
     ana_str += '\n'
     ana_str += '#define your steps and jobs here\n'
@@ -1365,6 +1423,7 @@ if __name__ == '__main__':
     
     print "analysis script template written to:"
     print fn
+    chmod(fn)
         
 
                     

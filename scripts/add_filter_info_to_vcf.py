@@ -27,7 +27,12 @@ def add_filter_info_to_vcf(in_vcf,out_vcf,expressions,descriptions):
         else:
             for e,d in zip(expressions,descriptions):
                 out_vcf.write('##FILTER=<ID=' + e + ',Description="' + d + '">\n')
-            subprocess.Popen(["tail","-n","+" + str(i+1),in_vcf.name],stdout=out_vcf)
+            out_vcf.flush()
+            command = ["tail","-n +" + str(i+1),in_vcf.name]
+            print command
+            p = subprocess.Popen(" ".join(command),shell=True,stdout=out_vcf)
+            #p.wait()
+            p.communicate()
             break
 
 
