@@ -403,10 +403,10 @@ class Step(BaseClass):
             self.run_type = 'qsub'
             self.qsub()
         elif mode == 'scratch_run':
-            if self.analysis.host == 'workstation':
+            #if self.analysis.host == 'workstation':
                 # if on local workstation and staging enabled, create analysis folder hierarchy on cluster
-                self.vprint("Creating analysis folder hierarchy on cluster.",mv=1)       
-                create_cluster_ana_folder(self.analysis.project,self.analysis.ana_dir)
+                #self.vprint("Creating analysis folder hierarchy on cluster.",mv=1)       
+                #create_cluster_ana_folder(self.analysis.project,self.analysis.ana_dir)
             self.run_type = 'run'
             self.scratch_run(parallel=parallel,nprocs=nprocs)
         elif mode == 'write_jobscripts':
@@ -650,11 +650,18 @@ class Job(BaseClass):
         #embed single string commands in lists:
         for k,v in d.items():
             if type(v) == str or type(v) == Command:
+<<<<<<< HEAD
                 d[k] = [v]
             elif v is not None:
                 #make sure that the command list is a copy of the original command list
                 d[k] = v[:] 
                 #print "changing", d,k,v
+=======
+                d[k]=[v]
+            elif v is not None:
+            # make a copy of list to get independent instance of the passed list 
+                d[k] = v[:]
+>>>>>>> f5d2fc7a9d3f465498fe037c630ddc1b8ae741f9
 
         #print d
         #print commands, cluster_commands,local_commands
