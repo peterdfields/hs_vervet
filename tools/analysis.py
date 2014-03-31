@@ -132,7 +132,7 @@ def pretty_comment(comment,title,sep='-'):
 def make_ana_dirs(project,ana_dir):
     for direc in ["_data","log","script","jobscript","io","output"]:
         hvb.try_make_dirs(os.path.join("~/{}_project".format(project),ana_dir,direc))
-    for direc in ["_data","output"]:
+    for direc in ["_data","output","io"]:
         hvb.try_make_dirs(os.path.join("~/{}_scratch".format(project),ana_dir,direc))
 
 def is_cluster():
@@ -230,6 +230,7 @@ class Analysis(BaseClass):
     consistent local and mendel usage with optionall staging...
     """
     def __init__(self, name, project,mendel_project=None,
+                    ana_dir="analyses",
                     default_run = None,description=None,verbose=0):
                 #,
                 #these options are depreciated, use the arguments above
@@ -263,7 +264,7 @@ class Analysis(BaseClass):
         self.project = "~/{}_project".format(project)
         self.lab_dir = "~/{}_lab".format(project)
         self.description = (description if description is not None else '')
-        self.ana_dir = os.path.join('analyses/',self.name)
+        self.ana_dir = os.path.join(ana_dir,self.name)
 
         self.submit_log_fn = os.path.join(self.project,self.ana_dir,'log/', self.name+"_submit_log.txt")
 
@@ -649,7 +650,10 @@ class Job(BaseClass):
         #embed single string commands in lists:
         for k,v in d.items():
             if type(v) == str or type(v) == Command:
-                d[k]=[v]
+                d[k] = [v]
+            elif v is not None:
+                #make sure that the command list is a copy of the original command list
+                d[k] = v[:] 
                 #print "changing", d,k,v
 
         #print d
@@ -951,7 +955,15 @@ class Job(BaseClass):
         print "input files:", self.input_files
         print "output_files:", self.output_files 
         print "-"*50
-        
+
+    def poll_stats(self):
+        """
+        poll pbs stats once job has finished
+        """
+        p = subprocess.Popen("qstat -xf ",shell=True,stdout=subprocess.PIPE)
+        o = p.communicate()
+        print o
+
 class JoinedJob(Job):
     """
     This class holds several job objects to create a single job.
@@ -1047,8 +1059,7 @@ class JoinedJob(Job):
     def write_jobscript(self):
         self.write_to_jobscript([self.pbs_header()]+[job.command_string() for job in self.jobs])
         self.chmod_jobscript()
-    
-    
+
 
 
 class StageJob(Job):
@@ -1302,6 +1313,12 @@ class StageJob(Job):
             command = '{}'.format(self.file_name)
         self.execute(command)
 
+
+class CleanupJob(StageJob):
+    def __init__(self,step):
+        self.bind_to_step(step)
+
+
 class Command(object):
     def __init__(self,command,description=None,job=None,format=True):
         self.description = description if description is not None else ""
@@ -1341,6 +1358,8 @@ class Command(object):
             file.write("\n")
         file.write(self.command)
 
+
+
 if __name__ == '__main__':
     import argparse
 
@@ -1370,14 +1389,15 @@ if __name__ == '__main__':
     parser.add_argument('project',
             help="Project to which this analysis belongs. Assumes that folders ~/<project>_project and ~/<project>_scratch exist, "\
                  "can be symlinks.")
-    parser.add_argument('-b','--mendel_project',default=None,
+    parser.add_argument('-p','--mendel_project',default=None,
             help="Specifies the value of project used for billing within PBS, i.e. the -p option when submitting jobs to PBS. "\
             "Default is same as project.")
+    parser.add_argument("-a","--ana_dir",default="analyses",help="Base dir for analyses.")
     args = parser.parse_args() 
 
 
     date_name = args.date + '_' + args.name
-    ana_dir = os.path.join('analyses', date_name)
+    ana_dir = os.path.join(args.ana_dir, date_name)
 
     #if args.mendel_project is None:
     #    args.mendel_project = args.project
@@ -1406,7 +1426,8 @@ if __name__ == '__main__':
     ana_str += "\n"
     ana_str += "#create the analysis object\n"
     if args.mendel_project is not None:
-        ana_str += "analysis = ana.Analysis(name='{}',project='{}',mendel_project='{}')\n".format(date_name,args.project,args.mendel_project)
+        ana_str +=  ("analysis = ana.Analysis(name='{}',project='{}',\n"
+                    "                       mendel_project='{}',ana_dir='{}')\n".format(date_name,args.project,args.mendel_project,args.ana_dir))
     else:
         ana_str += "analysis = ana.Analysis(name='{}',project='{}')\n".format(date_name,args.project)
     #make an additional arguments that allows to write some job and step examples to the file ..
