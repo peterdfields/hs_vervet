@@ -352,6 +352,8 @@ class Step(BaseClass):
             self.name = 'no_name'
         else:
             self.name = str(name)
+        if self.analysis is not None:
+            self.stats_fn = os.path.join(self.analysis.project,self.analysis.ana_dir,"log",self.name+".stats")
         self.short_name = ''.join([s[0].upper() for s in self.name.split('_')])
         #if name is None:
         #    self.in_fname = None
@@ -510,6 +512,14 @@ class Step(BaseClass):
             job.release()
         if self.stagein_job is not None:
             self.stagein_job.release()
+
+    def monitor(self):
+        """
+        monitor the jobs and create stats files if finished
+        """
+        pbs_ids = [j.pbs_id for j in self.jobs]
+        subprocess.Popen(["monitor_step.py"]+pbs_ids+["--ana_job_ids"]+\
+                        [j.id for j in self.jobs]+["-f",self.stats_fn,"-i","300"])
     
     def print_summary(self,job_summary=True):
         print "="*60
@@ -565,6 +575,7 @@ class Step(BaseClass):
         
     def remove_correctly_finished_jobs(self):
         self.jobs = [job for job in self.jobs if not job.ran_noerror()]
+
 
 
 #for backwards compatability
@@ -956,13 +967,6 @@ class Job(BaseClass):
         print "output_files:", self.output_files 
         print "-"*50
 
-    def poll_stats(self):
-        """
-        poll pbs stats once job has finished
-        """
-        p = subprocess.Popen("qstat -xf ",shell=True,stdout=subprocess.PIPE)
-        o = p.communicate()
-        print o
 
 class JoinedJob(Job):
     """
