@@ -2,7 +2,7 @@
 import subprocess, os, time
 import pandas as pd
 
-def monitor_step(pbs_ids,summary_fn,ana_job_ids=None,poll_interval=300):
+def monitor_step(pbs_ids,ana_job_ids,summary_fn,poll_interval=300):
     """
     Runs a deamon (execute on login node),
     that polls the jobs with qstat, runs
@@ -16,13 +16,12 @@ def monitor_step(pbs_ids,summary_fn,ana_job_ids=None,poll_interval=300):
     summary_stats = ["Job Id","Exit_status","qtime","Resource_List.walltime","resources_used.walltime",
                     "Resource_List.mem","resources_used.mem","Resource_List.ncpus",
                         "resources_used.cpupercent"]
-    if ana_job_id is None:
         
     try:
         stat_df = pd.read_csv(summary_fn,sep="\t")
         stat_df.set_index("ana_job_id",drop=False,inplace=True)
     except IOError:
-        stat_df = pd.DataFrame(columns=["ana_job_id"]+summary_stats,index=pbs_ids)
+        stat_df = pd.DataFrame(columns=["ana_job_id"]+summary_stats,index=ana_job_ids)
     
     #with open(summary_fn,"w") as sf:
     #    sf.write("\t".join(["ana_job_id"]+summary_stats)+"\n")
@@ -44,20 +43,21 @@ def monitor_step(pbs_ids,summary_fn,ana_job_ids=None,poll_interval=300):
                 fn =  base_fn + ".qstat"
                 with open(fn,"w") as f:
                     f.write(qstat)
-                if ana_job_ids is not None:
-                    ana_job_id = ana_job_ids[pbs_ids.index(id)]
-                else:
-                    ana_job_id = base_fn.split("_")[-1] 
+                #if ana_job_ids is not None:
+                ana_job_id = ana_job_ids[pbs_ids.index(id)]
+                #else:
+                #    ana_job_id = base_fn.split("_")[-1] 
                 #append summary 
                 report_dic = {k:qstat_dic[k] for k in summary_stats}
                 report_dic.update({"ana_job_id":ana_job_id})
                 stat_series = pd.Series(report_dic)
                 try:
-                    stat_df.ix[id] = stat_series
+                    stat_df.ix[ana_job_id] = stat_series
                 except KeyError:
-                    stat_series.name = id
+                    stat_series.name = ana_job_id
                     stat_df = stat_df.append(stat_series)
                 pbs_ids.remove(id)
+                ana_job_ids.remove(ana_job_id)
             stat_df.to_csv(summary_fn,index=False,sep="\t",float_format="%i")
         if pbs_ids:
             time.sleep(poll_interval)
