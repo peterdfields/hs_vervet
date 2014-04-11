@@ -353,7 +353,8 @@ class Step(BaseClass):
         else:
             self.name = str(name)
         if self.analysis is not None:
-            self.stats_fn = os.path.join(os.path.expanduser(self.analysis.project),self.analysis.ana_dir,"log",self.name+".stats")
+            self.stats_fn = os.path.join(os.path.expanduser(self.analysis.project),
+                                    self.analysis.ana_dir,"log",self.name+".stats")
         self.short_name = ''.join([s[0].upper() for s in self.name.split('_')])
         #if name is None:
         #    self.in_fname = None

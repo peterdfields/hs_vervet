@@ -317,11 +317,9 @@ def write_jobscript(file_ls,source_base,destination_base,mode,method='mcp',job_f
     
 
 if __name__ == '__main__':
-    sys.path.insert(0, os.path.expanduser('~/lib/python'))
-    sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
     import argparse
-    parser=argparse.ArgumentParser(description="Stage from /project on mendel\
-                                                 to lsw12 or scratch")
+    parser=argparse.ArgumentParser(description="Stage between project, scratch\
+                                                and lab folders of a project.")
     parser.add_argument("source_base",help="base directiory of source on dmn")
     parser.add_argument("target_base",help="base directiory of target on dmn")
     parser.add_argument("-m","--mode",choices=['non-exist','newer','force'],default='newer',help="Staging mode. Which files should be staged (only non existing, only newer or all.)")
