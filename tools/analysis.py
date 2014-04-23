@@ -105,8 +105,6 @@ The analysis.config should be read by the analysis directly at runtime!??
 
 """
 import sys, os, datetime, subprocess, socket, filecmp, shutil, warnings
-sys.path.insert(0, os.path.expanduser('~/lib/python'))
-sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
 from hs_vervet.tools import hs_vervet_basics as hvb
 
 
@@ -247,7 +245,8 @@ class Analysis(BaseClass):
         self.name = name
         self.host = 'cluster' if is_cluster() else 'workstation'
 
-        self.mendel_project = (mendel_project if mendel_project is not None else project)
+        self.mendel_project = (mendel_project if mendel_project is not None \
+                                                                else project)
 
         if default_run is None:
             if self.host == 'cluster':
@@ -266,7 +265,8 @@ class Analysis(BaseClass):
         self.description = (description if description is not None else '')
         self.ana_dir = os.path.join(ana_dir,self.name)
 
-        self.submit_log_fn = os.path.join(self.project,self.ana_dir,'log/', self.name+"_submit_log.txt")
+        self.submit_log_fn = os.path.join(self.project,self.ana_dir,'log/',
+                                                 self.name+"_submit_log.txt")
 
         make_ana_dirs(project,self.ana_dir)
 
@@ -321,7 +321,7 @@ class Analysis(BaseClass):
 class Step(BaseClass):
 
     def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, description=None, depend_steps=None, stagein=True, stageout=True, stage_analysis_dir=False, default_run=None,  check_date_input = True, verbose = None):
-        # the next to lines are just for the following methods to work
+        # the next two lines are just for the following methods to work
         # the attributes will be set again by their constructors
         self.name = name
         self.jobs = ([] if jobs is None else jobs)
@@ -802,83 +802,6 @@ class Job(BaseClass):
     def write_jobscript(self):
         self.write_to_jobscript([self.pbs_header(),self.command_string()])
         self.chmod_jobscript()
-        """
-        self.vprint("writing jobscript for",self.name,"to",os.path.expanduser(self.file_name),mv=1)
-        commands = self.commands
-        modules = self.modules 
-        id = self.id
-        walltime = self.walltime
-        ncpus = self.ncpus
-        debug = self.debug
-        try:
-            mem = self.mem
-        except:
-            print self.name
-            raise
-
-        with open(os.path.expanduser(self.file_name), "w") as jf:
-            jf.write("#!/bin/bash\n")
-            #print 'name:',name
-            jf.write("#PBS -N {}\n".format(self.job_name))
-            jf.write("#PBS -P vervetmonkey\n")
-            if debug:
-                jf.write("#PBS -q debug\n")
-            else:
-                jf.write("#PBS -l mem={}\n".format(mem))
-                jf.write("#PBS -l ncpus={}\n".format(ncpus))
-                jf.write("#PBS -l walltime={}\n".format(walltime))
-            jf.write("#PBS -o {}.o\n".format(os.path.expanduser(self.oe_fn)))
-            jf.write("#PBS -e {}.e\n".format(os.path.expanduser(self.oe_fn)))
-            #basic description of the job
-            jf.write(pretty_comment(self.analysis.description,"analysis: "+self.analysis.name,'='))
-            #jf.write("\n")
-            #if self.analysis.description:
-            #    descr = '#' + self.analysis.description.replace("\n","\n#")
-            #    jf.write(descr)
-            #    jf.write("\n")
-
-            jf.write(pretty_comment(self.step.description,"step: "+self.step.name,'+'))
-            jf.write(pretty_comment(self.description,"job: "+self.name,'-'))
-            
-            if self.exit_on_error:
-                jf.write("#exit on error\n")
-                jf.write("set -e\n")
-            #local and cluster modules:
-            if self.cluster_modules:
-                jf.write('if [ -n "$BC_HPC_SYSTEM" ]; then\n')
-                for mod in self.cluster_modules:
-                    jf.write("module load {}\n".format(mod))
-                jf.write("fi\n")
-            if self.local_modules:
-                jf.write('if [ -z "$BC_HPC_SYSTEM" ]; then\n')
-                for mod in self.local_modules:
-                    jf.write("module load {}\n".format(mod))
-                jf.write("fi\n")           
-            #load modules:
-            for module in modules:
-                jf.write("module load {}\n".format(module))
-
-
-            if self.cluster_commands:
-                jf.write('if [ -n "$BC_HPC_SYSTEM" ]; then\n')
-                for cmd in self.cluster_commands:
-                    cmd.write(jf)
-                    jf.write("\n")
-                jf.write("fi\n")
-            if self.local_commands:
-                jf.write('if [ -z "$BC_HPC_SYSTEM" ]; then\n')
-                for cmd in self.local_commands:
-                    cmd.write(jf)
-                    jf.write("\n")
-                jf.write("fi\n")
-            #command:
-            #print "the commands to write:",commands
-            for command in commands:
-                command.write(jf)
-                jf.write('\n')
-        self.chmod_jobscript()
-        #return jfn
-    """
 
 
     def chmod_jobscript(self,file='auto'):
@@ -896,14 +819,19 @@ class Job(BaseClass):
                     pbs_id = depend.strip()
                 else:
                     if depend.pbs_id == None:
-                        raise Exception("{0} depending on {1}. Qsub {0} before submitting {1}".format(depend.step.name+'_'+depend.id,self.step.name+'_'+self.id))
+                        raise Exception("{0} depending on {1}. Qsub {0} before \n"
+                        "submitting {1}.".format(depend.step.name+'_'+depend.id,
+                                                    self.step.name+'_'+self.id))
                     pbs_id = depend.pbs_id.strip()     
                 depend_str = depend_str + (':' if len(depend_str)>0 else '') + pbs_id 
-            command = 'qsub -h  -W depend=afterok:{0} {1}'.format(depend_str,os.path.expanduser(self.file_name))
-            p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            command = 'qsub -h  -W depend=afterok:{0} {1}'.format(depend_str,
+                                                os.path.expanduser(self.file_name))
+            p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
+                                                        stderr=subprocess.PIPE)
         else:
             command = 'qsub -h {0}'.format(os.path.expanduser(self.file_name))
-            p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
+                                                        stderr=subprocess.PIPE)
         out, err = p.communicate()
         self.pbs_id = out.strip() 
         self.analysis.append_submit_log(command, out, err)
@@ -927,9 +855,12 @@ class Job(BaseClass):
         import select
         for depend_job in self.depends:
             if depend_job.returncode != 0:
-                raise Exception("{0} finished with exit code {1}, won't start {2}".format(depend_job.name,depend_job.returncode,self.name))
+                raise Exception("{0} finished with exit code {1}, won't start {2}."
+                                "".format(depend_job.name,depend_job.returncode,
+                                                                        self.name))
         print "running", self.name
-        p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
+                                                    stderr=subprocess.PIPE)
         if self.verbose >= 1:
             stdout = []
             stderr = []
@@ -1071,9 +1002,11 @@ class JoinedJob(Job):
 
 
 class StageJob(Job):
-    def __init__(self,  direction, files=None, file_list=None,  step=None, stage_analysis_dir=None, mode='newer',depends=None, description=None,  verbose=None, debug=False):
-        if direction not in ['in','out']:
-            raise ValueError('direction should be "in" or "out" but is {}'.format(direction))
+    def __init__(self,  direction, files=None, file_list=None,  step=None,
+                 stage_analysis_dir=None, mode='newer',depends=None, 
+                            description=None,  verbose=None, debug=False):
+        
+        value_check(direction,['in','out'])
         self.direction = direction
         self.files = ([] if files is None else files)
         #file_list is a file containing filenames
