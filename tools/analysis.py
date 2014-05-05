@@ -105,10 +105,10 @@ The analysis.config should be read by the analysis directly at runtime!??
 
 """
 import sys, os, datetime, subprocess, socket, filecmp, shutil, warnings
-sys.path.insert(0, os.path.expanduser('~/lib/python'))
-sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
+import pandas as pd
+#sys.path.insert(0, os.path.expanduser('~/lib/python'))
+#sys.path.insert(0, os.path.join(os.path.expanduser('~/script')))
 from hs_vervet.tools import hs_vervet_basics as hvb
-
 
 
 
@@ -578,8 +578,23 @@ class Step(BaseClass):
         self.stageout_job = stageout_job       
         
     def remove_correctly_finished_jobs(self):
-        self.jobs = [job for job in self.jobs if not job.ran_noerror()]
+        #import pandas as pd
+        stat_df = pd.read_csv(self.stats_fn,sep="\t")
+        stat_df.set_index("ana_job_id",drop=False,inplace=True)
+        #self.jobs = [job for job in self.jobs if int(stat_df["Exit_status"].ix[job.id]) != 0 ]
+        #self.jobs = [job for job in self.jobs if not job.ran_noerror()]
+        def correctly_finished(job):
+            try:
+                if int(stat_df["Exit_status"].ix[job.id]) == 0:
+                    return True
+                else:
+                    return False
+            except KeyError:
+                return False
 
+        self.jobs[:] = [job for job in self.jobs if not correctly_finished(job)]
+        for job in self.jobs:
+            job.depends[:] = [j for j in job.depends if j in self.jobs]
 
 
 #for backwards compatability

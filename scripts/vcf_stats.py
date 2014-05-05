@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import os, sys
 import vcf
-import argparse, pickle
+import argparse, json
 
 parser = argparse.ArgumentParser(description="Print some statistics about the variants in the vcf.")
 parser.add_argument('in_vcf', type = argparse.FileType('r'), default = '-',help="VCF filename to parse.")
@@ -17,6 +17,9 @@ var_stats = {'total':0,'snps':0,'indels':0,'other_variants':0,'pass':0,'filters'
 if 'AA' in reader.infos.keys():
     var_stats.update({'ancestral_known':0})
     var_stats.update({'pass_ancestral_known':0})
+    var_stats.update({'pass_ancestral_is_ref':0})
+    var_stats.update({'pass_ancestral_is_alt':0})
+    var_stats.update({'pass_ancestral_third_allele':0})
 
 for record in reader:
     s = var_stats
@@ -42,8 +45,14 @@ for record in reader:
             s['ancestral_known'] += 1
             if not record.FILTER:
                 s['pass_ancestral_known'] += 1
+            if aa == record.REF:
+                s['pass_ancestral_is_ref'] += 1
+            elif aa == record.ALT[0]:
+                s['pass_ancestral_is_alt'] += 1
+            else:
+                s['pass_ancestral_third_allele'] += 1
         else:
             raise ValueError(record.CHROM+' '+str(record.POS)+' alternative allele has unknown state {}'.format(aa))
 
-pickle.dump(s,args.out_fn)
+json.dump(s,args.out_fn)
 
