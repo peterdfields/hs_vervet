@@ -45,12 +45,14 @@ for record in reader:
             s['ancestral_known'] += 1
             if not record.FILTER:
                 s['pass_ancestral_known'] += 1
-            if aa == record.REF:
-                s['pass_ancestral_is_ref'] += 1
-            elif aa == record.ALT[0]:
-                s['pass_ancestral_is_alt'] += 1
-            else:
-                s['pass_ancestral_third_allele'] += 1
+                if aa == record.REF:
+                    s['pass_ancestral_is_ref'] += 1
+                elif aa == record.ALT[0]:
+                    s['pass_ancestral_is_alt'] += 1
+                else:
+                    s['pass_ancestral_third_allele'] += 1
+        elif aa == "N":
+            pass
         else:
             raise ValueError(record.CHROM+' '+str(record.POS)+' alternative allele has unknown state {}'.format(aa))
 
