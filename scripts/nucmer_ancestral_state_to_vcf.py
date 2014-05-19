@@ -54,7 +54,7 @@ def parse_delta_file(fn,ref_fasta,output_aligns=False,query_fasta=None):
                 start_query = int(line.split()[2])
                 end_ref = int(line.split()[1])
                 end_query = int(line.split()[3].strip())
-                assert start_ref < end_ref, 
+                assert start_ref < end_ref,\
                         "referse strand in reference not implemented"
                 ref_indices = range(start_ref-1,end_ref)
                 pos_ref = 0
@@ -122,7 +122,8 @@ def write_outgroup_state_to_vcf(in_vcf,out_vcf,query_ref_dic,outgroup_name):
     for record in vcf_reader:
         try:
             outgroup_state = query_ref_dic[record.POS-1]
-            record.INFO.update({'AA':outgroup_state})
+            if outgroup_state != 'N':
+                record.INFO.update({'AA':outgroup_state})
         except KeyError:
             pass
         vcf_writer.write_record(record)
