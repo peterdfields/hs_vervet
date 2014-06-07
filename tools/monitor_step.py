@@ -89,13 +89,13 @@ if __name__ == '__main__':
 
     parser.add_argument("pbs_ids",nargs="+",help="PBS ids of the jobs to monitor.")
     parser.add_argument("-f","--stats_fname",required=True,help="Filename to store the stats in.")
-    parser.add_argument("-a","--ana_job_ids",default=None,nargs="+",help="Job identifiers as they are used in the analysis script.")
+    parser.add_argument("-a","--ana_job_ids",required=True,nargs="+",help="Job identifiers as they are used in the analysis script.")
     parser.add_argument("-i","--polling_interval",type=int,default=300,help="Time between two polls in seconds.")
     args=parser.parse_args()
 
     if args.ana_job_ids is not None:
         assert len(args.ana_job_ids) == len(args.pbs_ids)
 
-    monitor_step(args.pbs_ids,args.stats_fname,ana_job_ids=args.ana_job_ids,poll_interval=args.polling_interval)
+    monitor_step(args.pbs_ids,args.ana_job_ids,args.stats_fname,poll_interval=args.polling_interval)
     #monitor_step(["235293.login0","235294.login0","235295.login0","235296.login0"],os.getcwd()+"/test_pollstat.txt",poll_intervall=10)
 
