@@ -262,6 +262,7 @@ class Analysis(BaseClass):
         self.scratch = "~/{}_scratch".format(project)
         self.project = "~/{}_project".format(project)
         self.lab_dir = "~/{}_lab".format(project)
+        self.project_name = project
         self.description = (description if description is not None else '')
         self.ana_dir = os.path.join(ana_dir,self.name)
 
@@ -640,7 +641,6 @@ class JoinedStep(Step):
             self.append_job(job)
 
 
-
 class Job(BaseClass):
     def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, step = None, analysis_step = None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='04:00:00',ncpus=1,pbs_lines=None, mem=None, exit_on_error=True, description=None, debug=False, verbose=None):
         self.depends = ([] if depends is None else depends)
@@ -688,9 +688,12 @@ class Job(BaseClass):
         #print d
         #print commands, cluster_commands,local_commands
 
+        #change this to use the append_command method
         self.cluster_commands = ([] if d['cluster_commands'] is None else d['cluster_commands'])
         self.local_commands = ([] if d['local_commands'] is None else d['local_commands'])
+
         self.commands =  ([] if d['commands'] is None else d['commands'])
+
         self.cluster_modules = ([] if d['cluster_modules'] is None else d['cluster_modules'])
         self.local_modules = ([] if d['local_modules'] is None else d['local_modules'])
         self.modules = ([] if d['modules'] is None else d['modules'])
@@ -716,7 +719,8 @@ class Job(BaseClass):
         self.name = str(step.name) + ('_' if len(id)>0 else '') + id
         sn = self.step.short_name
         self.job_name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=8 else id[:8])
-        self.file_name = os.path.join(self.analysis.project,self.analysis.ana_dir,"jobscript/",self.name+".sh")   
+        self.file_name = os.path.join(self.analysis.project,self.analysis.ana_dir,"jobscript/",self.name)   
+        self.ext = ".sh"
         self.oe_fn=os.path.join(self.analysis.project,self.analysis.ana_dir,"log/",self.name)
         if self.verbose is None:
             self.verbose = step.verbose
@@ -807,8 +811,9 @@ class Job(BaseClass):
             cmd_str += command.cmd_str()
         return  cmd_str
 
+
     def write_to_jobscript(self,strings):
-        with open(os.path.expanduser(self.file_name), "w") as jf:
+        with open(os.path.expanduser(self.file_name)+self.ext, "w") as jf:
             for string in strings:
                 jf.write(string)
 
@@ -820,7 +825,7 @@ class Job(BaseClass):
 
     def chmod_jobscript(self,file='auto'):
         if file=='auto':
-            file = self.file_name
+            file = self.file_name + self.ext
         p = subprocess.call(['chmod','ug+x',os.path.expanduser(file)])
         #out, err = p.communicate()
         
@@ -839,13 +844,13 @@ class Job(BaseClass):
                     pbs_id = depend.pbs_id.strip()     
                 depend_str = depend_str + (':' if len(depend_str)>0 else '') + pbs_id 
             command = 'qsub -h  -W depend=afterok:{0} {1}'.format(depend_str,
-                                                os.path.expanduser(self.file_name))
-            p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
-                                                        stderr=subprocess.PIPE)
+                                                       os.path.expanduser(self.file_name)+self.ext)
+            p = subprocess.Popen(command, shell=True, 
+                                 stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         else:
-            command = 'qsub -h {0}'.format(os.path.expanduser(self.file_name))
-            p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
-                                                        stderr=subprocess.PIPE)
+            command = 'qsub -h {0}'.format(os.path.expanduser(self.file_name)+self.ext)
+            p = subprocess.Popen(command, shell=True,
+                                   stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         out, err = p.communicate()
         self.pbs_id = out.strip() 
         self.analysis.append_submit_log(command, out, err)
@@ -861,7 +866,7 @@ class Job(BaseClass):
         self.vprint("released job",self.name,"with",command,mv=1)
 
     def run_jobscript(self):
-        command = os.path.expanduser(self.file_name)
+        command = os.path.expanduser(self.file_name+self.ext)
         self.vprint("running locally",self.name)
         self.execute(command)
         
@@ -910,11 +915,96 @@ class Job(BaseClass):
         print "-"*50
         print self.name
         print "depends on:", [job.name for job in self.depends]
-        print "job filename:", self.file_name
+        print "jab filename:", self.file_name
         print "oe filenames:", self.oe_fn
         print "input files:", self.input_files
         print "output_files:", self.output_files 
         print "-"*50
+
+    #not used yet
+    def append_command(self,command):
+        self.commands.append(command)
+
+
+
+
+class QuickJob(Job):
+    def __init__(self,name,analysis,commands=None,interpreter="python"):
+        value_check(interpreter,["bash","python"])
+        self.step = Step(name=name,analysis=analysis)
+        super(QuickJob,self).__init__(commands=commands,step=self.step)
+        self.interpreter = interpreter
+        if interpreter == "python":
+            self.ext = ".py"
+        elif interpreter == "bash":
+            self.ext = ".sh"
+        #print self.file_name
+        #self.file_name = os.path.join(analysis.project,analysis.ana_dir,"jobscript/",name+".sh")...
+        #self.oe_fn=os.path.join(analysis.project,analysis.ana_dir,"log/",name)
+        #self.command = fix_string_indent(command)
+
+    def cd_base_dir_str(self,interpreter):
+        if interpreter == "python":
+            s = """\
+                import sys, os
+                try:
+                    if sys.argv[1] == "project":
+                        os.chdir(os.path.expanduser('~/{0}_project'))
+                    else:
+                        os.chdir(os.path.expanduser('~/{0}_scratch'))
+                except:
+                    os.chdir(os.path.expanduser('~/{0}_scratch'))
+                """
+        elif interpreter == "bash":
+            s = """\
+                if [ "$1" = "project" ]; then
+                cd ~/{0}_project
+                else
+                cd ~/{0}_scratch
+                fi
+                """
+        return self.fix_string_indent(s.format(self.analysis.project_name))
+
+
+    def fix_string_indent(self,string):
+        assert '\t' not in string, "use space indent, not tab!"
+        
+        lines = string.split("\n")
+
+        #corrects if first line is empty
+        if not lines[0].strip():
+            prefix = lines[0] + "\n"
+            lines = lines[1:]
+        else:
+            prefix = ""
+        #print "prefix:",prefix
+        #print "lines",lines
+        old_indent = [len(l) - len(l.lstrip(" ")) for l in lines]
+        delta_indent = [0] + [i1-i0 for i0,i1 in zip(old_indent,old_indent[1:])]
+        for i,line in zip(delta_indent,lines):
+            assert i % 4 == 0, "Use 4 space indention: " + line
+        new_indent = [0]
+        for i in range(1,len(lines)):
+            new_indent.append(new_indent[i-1]+min(delta_indent[i],4))
+        #print new_indent
+        new_string = "\n".join([l[oi-ni:] for l,oi,ni in zip(lines,old_indent,new_indent)])
+        return prefix + new_string
+
+    def write_jobscript(self):
+        with  open(os.path.expanduser(self.file_name)+self.ext,'w') as jf:
+            jf.write("#!/usr/bin/env {}\n".format(self.interpreter))
+            jf.write(self.cd_base_dir_str(self.interpreter)+"\n")
+            for command in self.commands:
+                jf.write(self.fix_string_indent(command.command)+"\n")
+        self.chmod_jobscript()
+
+
+    def run(self,mode="project_run"):
+            value_check(mode,['scratch_run','write_jobscripts','project_run'])
+            self.write_jobscript()
+            if mode in ["scratch_run","project_run"]:
+                self.execute("{} {}".format(self.file_name+self.ext,mode.split('_')[0]))
+
 
 
 class JoinedJob(Job):
@@ -1016,11 +1106,17 @@ class JoinedJob(Job):
 
 
 class StageJob(Job):
+<<<<<<< HEAD
     def __init__(self,  direction, files=None, file_list=None,  step=None,
                  stage_analysis_dir=None, mode='newer',depends=None, 
                             description=None,  verbose=None, debug=False):
         
         value_check(direction,['in','out'])
+=======
+    def __init__(self, direction, files=None, file_list=None, step=None, stage_analysis_dir=None, mode='newer',depends=None, description=None,  verbose=None, debug=False):
+        if direction not in ['in','out']:
+            raise ValueError('direction should be "in" or "out" but is {}'.format(direction))
+>>>>>>> 262854748abc4b486d7e3a398db1e58f71386845
         self.direction = direction
         self.files = ([] if files is None else files)
         #file_list is a file containing filenames
@@ -1107,8 +1203,10 @@ class StageJob(Job):
         self.vprint("out is:",out,mv=2)
         self.vprint("err is:",err,mv=2)
         
+        print "we are here"
         #naive check whether a job was submitted
-        if out is not None and 'login' in out:
+        if out is not None and '.pbs' in out:
+            print 
             self.pbs_id = out.strip()
             self.vprint("Submitted",self.name,"with job ID",self.pbs_id,mv=1)
             if wait:
