@@ -721,6 +721,7 @@ class Job(BaseClass):
         sn = self.step.short_name
         self.job_name = (sn if len(sn)<=3 else sn[:3]) + ('_' if len(id)>0 else '') + (id if len(id) <=8 else id[:8])
         self.file_name = os.path.join(self.analysis.project,self.analysis.ana_dir,"jobscript/",self.name)   
+        self.ext = ".sh"
         self.oe_fn=os.path.join(self.analysis.project,self.analysis.ana_dir,"log/",self.name)
         if self.verbose is None:
             self.verbose = step.verbose
@@ -813,7 +814,7 @@ class Job(BaseClass):
 
 
     def write_to_jobscript(self,strings):
-        with open(os.path.expanduser(self.file_name)+".sh", "w") as jf:
+        with open(os.path.expanduser(self.file_name)+self.ext, "w") as jf:
             for string in strings:
                 jf.write(string)
 
@@ -900,9 +901,9 @@ class Job(BaseClass):
     """
 
 
-    def chmod_jobscript(self,file='auto',ext=".sh"):
+    def chmod_jobscript(self,file='auto'):
         if file=='auto':
-            file = self.file_name + ext
+            file = self.file_name + self.ext
         p = subprocess.call(['chmod','ug+x',os.path.expanduser(file)])
         #out, err = p.communicate()
         
@@ -918,10 +919,10 @@ class Job(BaseClass):
                         raise Exception("{0} depending on {1}. Qsub {0} before submitting {1}".format(depend.step.name+'_'+depend.id,self.step.name+'_'+self.id))
                     pbs_id = depend.pbs_id.strip()     
                 depend_str = depend_str + (':' if len(depend_str)>0 else '') + pbs_id 
-            command = 'qsub -h  -W depend=afterok:{0} {1}'.format(depend_str,os.path.expanduser(self.file_name))
+            command = 'qsub -h  -W depend=afterok:{0} {1}'.format(depend_str,os.path.expanduser(self.file_name)+self.ext)
             p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         else:
-            command = 'qsub -h {0}'.format(os.path.expanduser(self.file_name))
+            command = 'qsub -h {0}'.format(os.path.expanduser(self.file_name)+self.ext)
             p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         out, err = p.communicate()
         self.pbs_id = out.strip() 
@@ -938,7 +939,7 @@ class Job(BaseClass):
         self.vprint("released job",self.name,"with",command,mv=1)
 
     def run_jobscript(self):
-        command = os.path.expanduser(self.file_name)
+        command = os.path.expanduser(self.file_name+self.ext)
         self.vprint("running locally",self.name)
         self.execute(command)
         
@@ -984,7 +985,7 @@ class Job(BaseClass):
         print "-"*50
         print self.name
         print "depends on:", [job.name for job in self.depends]
-        print "jaob filename:", self.file_name
+        print "jab filename:", self.file_name
         print "oe filenames:", self.oe_fn
         print "input files:", self.input_files
         print "output_files:", self.output_files 
@@ -1065,7 +1066,7 @@ class QuickJob(Job):
             jf.write(self.cd_base_dir_str(self.interpreter)+"\n")
             for command in self.commands:
                 jf.write(self.fix_string_indent(command.command)+"\n")
-        self.chmod_jobscript(ext=self.ext)
+        self.chmod_jobscript()
 
 
     def run(self,mode="project_run"):
@@ -1264,8 +1265,10 @@ class StageJob(Job):
         self.vprint("out is:",out,mv=2)
         self.vprint("err is:",err,mv=2)
         
+        print "we are here"
         #naive check whether a job was submitted
-        if out is not None and 'login' in out:
+        if out is not None and '.pbs' in out:
+            print 
             self.pbs_id = out.strip()
             self.vprint("Submitted",self.name,"with job ID",self.pbs_id,mv=1)
             if wait:
