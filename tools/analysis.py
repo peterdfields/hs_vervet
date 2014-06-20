@@ -929,11 +929,13 @@ class Job(BaseClass):
 
 
 class QuickJob(Job):
-    def __init__(self,name,analysis,commands=None,interpreter="python"):
+    def __init__(self,name,analysis,commands=None,interpreter="python",
+                                                    auto_fix_indent=False,**kwa):
         value_check(interpreter,["bash","python"])
-        self.step = Step(name=name,analysis=analysis)
-        super(QuickJob,self).__init__(commands=commands,step=self.step)
+        self.step = Step(name=name,analysis=analysis,default_run="scratch_run")
+        super(QuickJob,self).__init__(commands=commands,step=self.step,**kwa)
         self.interpreter = interpreter
+        self.auto_fix_indent = auto_fix_indent
         if interpreter == "python":
             self.ext = ".py"
         elif interpreter == "bash":
@@ -995,7 +997,11 @@ class QuickJob(Job):
             jf.write("#!/usr/bin/env {}\n".format(self.interpreter))
             jf.write(self.cd_base_dir_str(self.interpreter)+"\n")
             for command in self.commands:
-                jf.write(self.fix_string_indent(command.command)+"\n")
+                if self.auto_fix_indent:
+                    cmd = self.fix_string_indent(command.command)
+                else:
+                    cmd = command.command
+                jf.write(cmd+"\n")
         self.chmod_jobscript()
 
 
@@ -1106,17 +1112,11 @@ class JoinedJob(Job):
 
 
 class StageJob(Job):
-<<<<<<< HEAD
     def __init__(self,  direction, files=None, file_list=None,  step=None,
                  stage_analysis_dir=None, mode='newer',depends=None, 
                             description=None,  verbose=None, debug=False):
         
         value_check(direction,['in','out'])
-=======
-    def __init__(self, direction, files=None, file_list=None, step=None, stage_analysis_dir=None, mode='newer',depends=None, description=None,  verbose=None, debug=False):
-        if direction not in ['in','out']:
-            raise ValueError('direction should be "in" or "out" but is {}'.format(direction))
->>>>>>> 262854748abc4b486d7e3a398db1e58f71386845
         self.direction = direction
         self.files = ([] if files is None else files)
         #file_list is a file containing filenames
