@@ -656,7 +656,7 @@ class Job(BaseClass):
         self.verbose = verbose
         self.pbs_lines = ([] if pbs_lines is None else pbs_lines)
         if mem is None:
-            self.mem = str(ncpus * 3825) + 'mb'
+            self.mem = str(ncpus * 3900) + 'mb'
         else:
             self.mem = mem
         self.id = str(id)
