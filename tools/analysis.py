@@ -104,7 +104,7 @@ only offer 1,3,5,6?
 The analysis.config should be read by the analysis directly at runtime!??
 
 """
-import sys, os, datetime, subprocess, socket, filecmp, shutil, warnings
+import sys, os, time, datetime, subprocess, socket, filecmp, shutil, warnings
 import pandas as pd
 from hs_vervet.tools import hs_vervet_basics as hvb
 
@@ -507,6 +507,7 @@ class Step(BaseClass):
         for job in self.jobs:
             job.write_jobscript()
             job.qsub_jobscript()
+            time.sleep(0.1)
         if self.stageout_job is not None:
             self.stageout_job.qsub_prepare_jobscript()
             #self.stageout_job.release()
