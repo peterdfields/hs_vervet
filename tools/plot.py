@@ -1,5 +1,6 @@
 import matplotlib
 import numpy
+import pylab
 
 #plot sfs (from dadi)
 
@@ -37,7 +38,10 @@ class Sfs(numpy.ma.masked_array):
                                        fill_value=numpy.nan, keep_mask=True,
                                        shrink=True)
         subarr = subarr.view(subtype)
-        subarr.pop_ids = ["1","1"]
+        if pop_ids is not None:
+            subarr.pop_ids = pop_ids
+        else:
+            subarr.pop_ids = ["1","1"]
         return subarr
 def plot_single_2d_sfs(sfs, vmin=None, vmax=None, ax=None,
                        pop_ids=None, extend='neither', colorbar=True):
@@ -76,7 +80,14 @@ def plot_single_2d_sfs(sfs, vmin=None, vmax=None, ax=None,
     mappable=ax.pcolor(numpy.ma.masked_where(sfs<vmin, sfs),
                        cmap=pylab.cm.hsv, shading='flat',
                        norm=norm)
-    ax.figure.colorbar(mappable, extend=extend, format=format)
+    #hs
+    try:
+        ax.figure.colorbar(mappable, extend=extend, format=format)
+    except:
+        pass
+    #/hs
+    #original:
+    #ax.figure.colorbar(mappable, extend=extend, format=format)
     if not colorbar:
         del ax.figure.axes[-1]
 
@@ -87,7 +98,11 @@ def plot_single_2d_sfs(sfs, vmin=None, vmax=None, ax=None,
             pop_ids = sfs.pop_ids
         else:
             pop_ids = ['pop0','pop1']
-    ax.set_ylabel(pop_ids[0], horizontalalignment='left')
+    #hs:
+    ax.set_ylabel(pop_ids[0], horizontalalignment='right')
+    ax.yaxis.set_label_coords(-0.05, 0.6)
+    #/hs
+    #ax.set_ylabel(pop_ids[0], horizontalalignment='left')
     ax.set_xlabel(pop_ids[1], verticalalignment='bottom')
 
     ax.xaxis.set_major_formatter(_ctf)
