@@ -63,7 +63,7 @@ def plot_single_2d_sfs(sfs, vmin=None, vmax=None, ax=None,
         ax = pylab.gca()
 
     if vmin is None:
-        vmin = sfs.min()
+        vmin = sfs.min() + 1
     if vmax is None:
         vmax = sfs.max()
 
@@ -84,7 +84,9 @@ def plot_single_2d_sfs(sfs, vmin=None, vmax=None, ax=None,
     try:
         ax.figure.colorbar(mappable, extend=extend, format=format)
     except:
-        pass
+        print numpy.ma.masked_where(sfs<vmin, sfs)
+        print vmin
+        #ax.figure.colorbar(mappable, extend=extend, format=format)
     #/hs
     #original:
     #ax.figure.colorbar(mappable, extend=extend, format=format)
