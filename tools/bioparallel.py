@@ -98,8 +98,6 @@ class VCFParser(object):
             #do something on reader (stupid example)
             record.ALT = "X"
             if record.REF == "A":
-                writer.write_record(record)
-                
     #define function to update the vcf header
     def update_vcf_info(reader):
         reader.infos.update({'AA':\
@@ -158,7 +156,7 @@ class VCFParser(object):
     """
     def __init__(self,vcf_fn,parse_fun,chromosomes,chrom_len=None,reduce_fun=None,
                     mode="count",out_fn=None,update_vcf_header_fun=
-                    lambda x: None,tmp_dir="."):
+                    lambda x: None,write_header_fun = lambda x: None,tmp_dir="."):
         #implement a check whether file is bgzip
         #and has index, ask to create if not
         modes = ["count","write","vcf_write"]
@@ -198,6 +196,7 @@ class VCFParser(object):
         
         self.mode = mode
         self.update_vcf_header = update_vcf_header_fun
+        self.write_header = write_header_fun
         self.tmp_fns = []
         self.tmp_dir = tmp_dir
         
@@ -237,7 +236,6 @@ class VCFParser(object):
                 for line in f:
                     out_file.write(line)
     #----------------------------------------
-    
     def fetch(self,chrom,start,end):
         chunk = pyvcf.Reader(filename=self.in_fn).fetch(chrom,start,end)
         return chunk
@@ -276,6 +274,10 @@ class VCFParser(object):
             self.out = self.reduce_fun(self.parallel_out)
         elif self.mode == "write":
             with open(self.out_fn,"w") as out_handle:
+                reader = pyvcf.Reader(filename=self.in_fn)
+                print "writing tsv header", self.write_header
+                self.write_header(reader,out_handle)
+            with open(self.out_fn,"a") as out_handle:
                 self.out = self.reduce_fun(self.tmp_fns,out_handle)
             #self.del_tmp_files()
         elif self.mode == "vcf_write":

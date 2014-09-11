@@ -499,7 +499,7 @@ class Step(BaseClass):
 
     def qsub(self):
         #hold makes sure that the depend jobs are seen by the dependent jobs
-        
+        sleep = 0.5
         if self.stageout_job is not None:
             self.stageout_job.write_prepare_jobscript()
         if self.stagein_job is not None:
@@ -507,12 +507,16 @@ class Step(BaseClass):
         for job in self.jobs:
             job.write_jobscript()
             job.qsub_jobscript()
-            time.sleep(0.1)
+            self.vprint("sleep {}...".format(sleep),mv=1)
+            time.sleep(sleep)
         if self.stageout_job is not None:
             self.stageout_job.qsub_prepare_jobscript()
-            #self.stageout_job.release()
+            #self.stageout_job.release()a
+        sleep = 2
         for job in self.jobs:
             job.release()
+            self.vprint("sleep {}...".format(sleep),mv=1)
+            time.sleep(sleep)
         self.monitor()
         if self.stagein_job is not None:
             self.stagein_job.release()
@@ -657,7 +661,7 @@ class Job(BaseClass):
         self.verbose = verbose
         self.pbs_lines = ([] if pbs_lines is None else pbs_lines)
         if mem is None:
-            self.mem = str(ncpus * 3900) + 'mb'
+            self.mem = str(ncpus * 3875) + 'mb'
         else:
             self.mem = mem
         self.id = str(id)
