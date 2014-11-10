@@ -321,7 +321,7 @@ class Analysis(BaseClass):
 
 class Step(BaseClass):
 
-    def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, description=None, depend_steps=None, stagein=True, stageout=True, stage_analysis_dir=False, default_run=None,  check_date_input = True, verbose = None):
+    def __init__(self, analysis=None, name=None, jobs=None, append_to_ana=True, description=None, depend_steps=None, stagein=False, stageout=False, stage_analysis_dir=False, default_run=None,  check_date_input = True, verbose = None):
         # the next two lines are just for the following methods to work
         # the attributes will be set again by their constructors
         self.name = name
