@@ -67,7 +67,10 @@ angsd_df = pd.read_csv(args.in_maf_gz,
 
 sf_df = angsd_to_sweepfinder(angsd_df)
 
+print sf_df
+
 sf_df.to_csv(args.out_fn,sep="\t")
+
 
 if args.sfs_fn:
     sfs(sf_df).to_csv(args.sfs_fn,header=None,sep="\t")
