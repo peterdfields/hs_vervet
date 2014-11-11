@@ -6,6 +6,7 @@ import numpy as np
 eu = os.path.expanduser
 jn = os.path.join
 
+print pd.__version__
 
 #general I/O functions
 
@@ -137,9 +138,21 @@ def get_peaks(gene_info,top_s,max_dist):
                 and values peak height
     max_dist ... maximum distance between gene and peak
     """
+    #print "gene_info"
+    #print gene_info
+    #print 'top_s'
+    #print top_s
+    #print 'max_dist'
+    #print max_dist
     def get_dist(df,gene_pos):
+        """
+        calculate distance
+        """
+        
         s = pd.Series(df.index.droplevel(0).values - gene_pos.ix[df.index[0][0]],
                                                   index=df.index.droplevel(0).values)
+        #df = pd.DataFrame(df.index.droplevel(0).values - gene_pos.ix[df.index[0][0]],
+        #                                          index=df.index.droplevel(0).values)
         return s
     tot_gene_peaks_df = pd.DataFrame()
     if not top_s.index.is_monotonic:
@@ -159,16 +172,42 @@ def get_peaks(gene_info,top_s,max_dist):
                     apply(lambda df: get_dist(df,
                                               gene_info.ix[chrom].reset_index().set_index("gene_id")["pos"]))
         dist_start.name = "dist_start"
+        #dist_start.columns = ["dist_start"]
         dist_end = x.groupby(lambda i: i[0]).\
                     apply(lambda df: get_dist(df,
                                               gene_info.ix[chrom].set_index("gene_id")["end"]))
         dist_end.name = "dist_end"
+        #dist_end.columns = "dist_end"
+        #the following has problems if there is only a single gene
         gene_peaks_df = pd.concat([x,dist_start,dist_end],axis=1)
+        #gene_peaks_df = x.join(dist_start).join(dist_end)
         gene_peaks_df.index = pd.MultiIndex.from_arrays([gene_peaks_df.index.droplevel(1),
                                          [chrom]*len(x),
                                          gene_peaks_df.index.droplevel(0)])
-        tot_gene_peaks_df = pd.concat([tot_gene_peaks_df, gene_peaks_df])
-        tot_gene_peaks_df.index.names = ["gene_id","chrom","peak_pos"]
+        try:
+            tot_gene_peaks_df = pd.concat([tot_gene_peaks_df, gene_peaks_df],axis=0)
+        except:
+            print "loc_top_s"
+            print loc_top_s
+            print "start"
+            print start
+            print "end"
+            print end
+            print "x"
+            print x
+            print "dist_start"
+            print dist_start
+            print "dist_end"
+            print dist_end
+            print "gene_peaks_df"
+            print gene_peaks_df
+            print "gene_info"
+            print gene_info
+            print 'gene_info.ix[chrom].reset_index().set_index("gene_id")["pos"]'
+            print gene_info.ix[chrom].reset_index().set_index("gene_id")["pos"]
+            
+
+    tot_gene_peaks_df.index.names = ["gene_id","chrom","peak_pos"]
     return tot_gene_peaks_df
 
 def get_initial_rank_table(real_assoc):
@@ -179,14 +218,28 @@ def get_p_val(rank_table):
     Input:
     
     """
-    r =  1-rank_table["rank"]*1./(rank_table["out_of"]+1)
+    print "get_p_val input rank table"
+    print rank_table
+    try:
+        r =  1-rank_table["rank"]*1./(rank_table["out_of"]+1)
+    except:
+        print "rank_table within get_p_val 2"
+        print rank_table
+        raise
     r.sort()
     r.name = "p_value"
     return r
 
 def update_rank(rank_table,permut_assoc_fh):
+    
     assoc_table = read_table(permut_assoc_fh,index_col=0)
     r = assoc_table.apply(lambda row: get_rank(row,rank_table),axis=1)
+    print "assoc_table"
+    print assoc_table
+    print "rank_table"
+    print rank_table
+    print "new_rank_table"
+    print r
     return r
     
 def total_rank(rank_table, permut_fns):
@@ -278,7 +331,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    value_s = read_table(args.in_rod,index_col=[0,1])[args.col].copy()
+    value_s = read_table(args.in_rod,index_col=[0,1],
+                            usecols=["chrom", "pos", args.col])
     gene_df = read_table(args.gene_df_fn,index_col=[0,1])
     gene_to_cat = read_table(args.gene_to_cat_fn,index_col=[0])
 
@@ -290,11 +344,19 @@ if __name__ == "__main__":
 
         out_sep = get_sep(args.pval_out.name)
         ppg_sep = get_sep(args.peaks_per_gene_fn.name)
-
-        value_s.sort(ascending=False, inplace=True)
+        #print "value_s"
+        #print value_s
+        value_s.sort(args.col,ascending=False, inplace=True)
+        #print "value_s"
+        #print value_s
         top_s = value_s.iloc[:args.top_n]
+        #print "top_s"
+        #print top_s
+        del value_s
         cand_genes = get_genes(top_s, gene_df, max_dist=args.max_dist)
 
+        print "gene_df"
+        print "gene_df"
         #save peak info for candidate genes:
         gene_info = get_gene_info(cand_genes, gene_df)
         peaks_per_gene = get_peaks(gene_info,top_s,args.max_dist)
@@ -306,12 +368,10 @@ if __name__ == "__main__":
         #print "real_assoc:"
         #print real_assoc
         rank_table = get_initial_rank_table(assoc)
-        #print "rank_table:"
-        #print rank_table
         #if no files are provided we just get the intital rank table
         tot_rank = total_rank(rank_table, args.permut_fns)
-
         p_vals = get_p_val(tot_rank)
+
         p_val_df = tot_rank.join(p_vals)
         p_val_df.sort("p_value",inplace=True)
         p_val_df.index.name = "category"
