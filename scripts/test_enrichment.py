@@ -1,4 +1,12 @@
 #!/usr/bin/env python
+"""
+TODO:
+-value_s not needed in mode reduce, don't requre it and load it
+-similar case with other parameters
+-it would save disk space if we do not add go categories with 0 genes
+to all assoc_tables, but only add them in the end.
+"""
+
 
 import os
 import pandas as pd
@@ -6,7 +14,7 @@ import numpy as np
 eu = os.path.expanduser
 jn = os.path.join
 
-print pd.__version__
+#print pd.__version__
 
 #general I/O functions
 
@@ -101,6 +109,8 @@ def get_go_assoc(gene_ls, gene_to_go):
     category in gene_to_go
     """
     s = gene_to_go.set_index("gene_symbol").ix[gene_ls].groupby("go_identifier").apply(len)
+    s.name = "n_genes"
+    s.index.name = "category"
     return s
 
 def multiple_permut_assoc(rod_s, gene_df, gene_to_go, top_n, max_dist, n_runs, rnd_seed=None):
@@ -108,6 +118,10 @@ def multiple_permut_assoc(rod_s, gene_df, gene_to_go, top_n, max_dist, n_runs, r
         np.random.seed(rnd_seed)
     assoc_table = pd.concat([permut_assoc(rod_s, rnd, gene_df, gene_to_go, top_n, max_dist) for rnd in np.random.rand(n_runs)],axis=1)
     assoc_table = assoc_table.fillna(0).astype(int)
+    #add missing categories to the table (i.e., categories where all permutations have zero hits)
+    missing_idx = gene_to_go.set_index("go_identifier").index.diff(assoc_table.index)
+    missing_df = pd.DataFrame(0,index=missing_idx,columns=assoc_table.columns)
+    assoc_table = pd.concat([assoc_table,missing_df])
     return assoc_table
 
 def save_permut_assoc_table(assoc_table,fn):
@@ -210,16 +224,31 @@ def get_peaks(gene_info,top_s,max_dist):
     tot_gene_peaks_df.index.names = ["gene_id","chrom","peak_pos"]
     return tot_gene_peaks_df
 
+
+def get_peak_info(top_s,peaks_per_gene):
+    gene_list_peak_pos = peaks_per_gene.reset_index([0])["gene_id"].groupby(lambda x: x).apply(list)
+    gene_list_peak_pos.name = "genes"
+    gene_list_peak_pos.index = pd.MultiIndex.from_tuples(gene_list_peak_pos.index)
+    peak_info = pd.concat([top_s,gene_list_peak_pos],axis=1)
+    peak_info.sort("Likelihood",ascending=False,inplace=True)
+    peak_info.index.names = ["chrom","pos"]
+    return peak_info
+
 def get_initial_rank_table(real_assoc):
-    return pd.DataFrame({"n_genes":real_assoc.values,"rank":0,"out_of":0},index=real_assoc.index)
+    df = pd.DataFrame({"n_genes":real_assoc.values,"rank":0,"out_of":0},index=real_assoc.index)
+    df.index.name = "category"
+    return df
+
+def get_genes_per_go(gene_ls, gene_to_go):
+    s = gene_to_go.set_index("gene_symbol").ix[gene_ls].groupby("go_identifier").apply(lambda x: list(x.index))
+    s.name = "genes"
+    return s
 
 def get_p_val(rank_table):
     """
     Input:
     
     """
-    print "get_p_val input rank table"
-    print rank_table
     try:
         r =  1-rank_table["rank"]*1./(rank_table["out_of"]+1)
     except:
@@ -230,24 +259,25 @@ def get_p_val(rank_table):
     r.name = "p_value"
     return r
 
-def update_rank(rank_table,permut_assoc_fh):
-    
-    assoc_table = read_table(permut_assoc_fh,index_col=0)
+def update_rank(rank_table,assoc_table):
     r = assoc_table.apply(lambda row: get_rank(row,rank_table),axis=1)
-    print "assoc_table"
-    print assoc_table
-    print "rank_table"
-    print rank_table
-    print "new_rank_table"
-    print r
+    r.index.name = "category"
     return r
-    
+
+#def update_rank(rank_table,permut_assoc_fh):
+#    assoc_table = read_table(permut_assoc_fh,index_col=0)
+#    assert len(assoc_table)>0, "file {} seems to be empty".format(permut_assoc_fh.name)
+#    r = assoc_table.apply(lambda row: get_rank(row,rank_table),axis=1)
+#    return r
+
+
 def total_rank(rank_table, permut_fns):
     rt = rank_table.copy()
     for f in permut_fns:
         rt = update_rank(rt,f)
     return rt
-    
+
+
 #def save_p_value_total(rank_table, permut_fns):
     
     
@@ -285,115 +315,191 @@ def get_rank(series,rank_df):
 
 if __name__ == "__main__":
     import argparse
-
+    import pdb
 
     parser = argparse.ArgumentParser(description="Test enrichment of genes in certain categories "
                                                  "compared to the empirical distribution\n "
                                                  "of genes per category, produced by \n "
                                                  "shifting (rotating) the input data across the genome.")
-    subparsers = parser.add_subparsers(dest='mode',help='Mode "permutation" or "reduce"')
-    
-    parser_a = subparsers.add_parser('permutation', help='Do random shifts of input rod and write \n'
-                                                         'the results to a file.')
-    parser_a.add_argument("--n_runs", type=int, required=True)
-    parser_a.add_argument("--out_fn",type=argparse.FileType('w'),required=True)
-
-    parser_b = subparsers.add_parser('reduce', help='Get rank and p values for real data \n'
-                                                    'compared to shifted data runs.')
-    parser_b.add_argument("--permut_fns",nargs='*',default=None,type=argparse.FileType('r'))
-    parser_b.add_argument("--cat_to_name_fn",default=None,type=argparse.FileType('r'),help="Table that maps categories"
-                                                                                      "to category descriptions.")
-    parser_b.add_argument("--pval_out",type=argparse.FileType('w'),required=True,help="File to write enrichment p_values to.")
-    parser_b.add_argument("--peaks_per_gene_fn",type=argparse.FileType('w'),required=True,
-                                                                help="File to write peak info for each gene.")
-
-
-
-    parser.add_argument("--in_rod",type=argparse.FileType('r'),
-                                     help="Input reference ordered data containing the values per position.",
-                                        required=True)
-    parser.add_argument("--col",type=str,help="Column label of the input table that contains the values"
-                                                    " by which the rod positions should be ranked",
-                                                                                    required=True)
-    parser.add_argument("--top_n",type=int,help="number of top values of the input rod to consider.",
-                                                                        required=True)
-    parser.add_argument("--max_dist",type=int, help="Maximum distance (in bp) between gene and rod feature"
-                                                    "in order to consider a gene.", required=True)
-    parser.add_argument("--gene_df_fn", type=argparse.FileType('r'), 
-                                        help="Filename of the gene info dataframe "
-                                             " with index (chrom,start) and columns 'gene_id', 'end'",
-                                                                required=True)
     parser.add_argument("--gene_to_cat_fn",type=argparse.FileType('r'),
                                             help="Filename for file that links genes and"
                                                  " categories. E.g. go associations. Index should be unique.",
                                                     required=True)
+    subparsers = parser.add_subparsers(dest='mode',help='Mode "permutation" or "reduce"')
+
+
+    #######mode real assoc##########
+    parser_0 = subparsers.add_parser('real_assoc', help='Get assocications for the real original'
+                                                        ' data set and save them.')
+    parser_0.add_argument("--peaks_per_gene_fn",type=argparse.FileType('w'),required=True,
+                                                                help="File to write peak info for each gene.")
+    parser_0.add_argument("--top_peaks_fn",type=argparse.FileType('w'),required=True,
+                                                                help="File to write top peak info.")
+    parser_0.add_argument("--assoc_fn",type=argparse.FileType('w'),required=True,help="File to write associations"
+                                                                                     "per gene.")
+    
+    ######mode permutation##########
+    parser_a = subparsers.add_parser('permutation', help='Do random shifts of input rod and write \n'
+                                                         'the results to a file.')
+    parser_a.add_argument("--n_runs", type=int, required=True)
+    parser_a.add_argument("--out_fn",type=argparse.FileType('w'),required=True)
+    parser_a.add_argument("--real_assoc_fn",type=argparse.FileType('r'),required=True,
+                                                                help="File to read real associations"
+                                                                                     "from.")
+    #####shared by real assoc and permutation#####
+    
+    for p in [parser_0, parser_a]:
+        p.add_argument("--in_rod",type=argparse.FileType('r'),
+                                     help="Input reference ordered data containing the values per position.",
+                                        required=True)
+        p.add_argument("--col",type=str,help="Column label of the input table that contains the values"
+                                                    " by which the rod positions should be ranked",
+                                                                                    required=True)
+        group = p.add_mutually_exclusive_group(required=True)
+        group.add_argument("--top_n",type=int, help="Number of top values of the input rod to consider.")
+        group.add_argument('--top_q', type=float,help="Input quantile to consider, e.g. 0.01 for top 1%.")
+        p.add_argument("--max_dist",type=int, help="Maximum distance (in bp) between gene and rod feature"
+                                                    "in order to consider a gene.", required=True)
+  
+        p.add_argument("--gene_df_fn", type=argparse.FileType('r'), 
+                                        help="Filename of the gene info dataframe "
+                                             " with index (chrom,start) and columns 'gene_id', 'end'",
+                                                                required=True)
+
+
+    ######mode reduce##########
+    parser_b = subparsers.add_parser('reduce', help='Get rank and p values for real data \n'
+                                                    'compared to shifted data runs.')
+    parser_b.add_argument("--permut_fns",nargs='*',default=None,type=str)#type=argparse.FileType('r'))
+    parser_b.add_argument("--cat_to_name_fn",default=None,type=argparse.FileType('r'),help="Table that maps categories"
+                                                                                      "to category descriptions.")
+    parser_b.add_argument("--pval_out",type=argparse.FileType('w'),required=True,help="File to write enrichment p_values to.")
+    
+    parser_b.add_argument("--peaks_per_gene_fn",type=argparse.FileType('r'),help="File path of gene info as produced in"
+                                                                            " real assoc mode. must have a column gene_id.")
+
 
 
     args = parser.parse_args()
 
-    value_s = read_table(args.in_rod,index_col=[0,1],
-                            usecols=["chrom", "pos", args.col])
-    gene_df = read_table(args.gene_df_fn,index_col=[0,1])
     gene_to_cat = read_table(args.gene_to_cat_fn,index_col=[0])
 
 
+    if args.mode == "real_assoc" or args.mode == "permutation":
+        #get data
+        value_s = read_table(args.in_rod,index_col=[0,1],
+                            usecols=["chrom", "pos", args.col],
+                                                    squeeze=True)
+        assert isinstance(value_s,pd.core.series.Series)
 
-    if args.mode == "reduce":
+        #try:
+        if args.top_n is not None:
+            top_n = args.top_n
+        #except NameError:
+        else:
+            top_n = int(len(value_s)*args.top_q)
+            print "Using the top", top_n, "peaks."
+
+        gene_df = read_table(args.gene_df_fn,index_col=[0,1])
+
+        if args.mode == "real_assoc":
+
+            ppg_sep = get_sep(args.peaks_per_gene_fn.name)
+            tp_sep = get_sep(args.top_peaks_fn.name)
+            assoc_sep = get_sep(args.assoc_fn.name)
+           
+            value_s = value_s.sort(ascending=False, inplace=False)
+            top_s = value_s.iloc[:top_n]
+            del value_s
+            cand_genes = get_genes(top_s, gene_df, max_dist=args.max_dist)
+
+            #save peak info for candidate genes:
+            gene_info = get_gene_info(cand_genes, gene_df)
+            peaks_per_gene = get_peaks(gene_info,top_s,args.max_dist)
+            peaks_per_gene.to_csv(args.peaks_per_gene_fn,sep=ppg_sep)
+
+            #save list of top peaks
+            peak_info = get_peak_info(top_s,peaks_per_gene)
+            peak_info.to_csv(args.top_peaks_fn,sep=tp_sep)
+
+            assoc = get_go_assoc(cand_genes, gene_to_cat)
+            assoc.to_csv(args.assoc_fn,sep=assoc_sep,header=True)
+
+        elif args.mode == "permutation":
+    
+            out_sep = get_sep(args.out_fn.name)
+            real_assoc = read_table(args.real_assoc_fn,squeeze=True,index_col=0)
+            
+            rank_table = get_initial_rank_table(real_assoc)
+
+            assoc_table = multiple_permut_assoc(value_s, 
+                                                gene_df,
+                                                gene_to_cat, 
+                                                top_n,
+                                                args.max_dist,
+                                                args.n_runs,
+                                                rnd_seed=None)
+
+
+            rank_table = update_rank(rank_table,assoc_table)
+            
+            rank_table = rank_table[["n_genes","rank","out_of"]]
+                   
+            rank_table.to_csv(args.out_fn,sep=out_sep)
+
+    elif args.mode == "reduce":
         if args.permut_fns is None:
             args.permut_fns = []
+        
+        permut_fhs = []
+        for fn in args.permut_fns:
+            try:
+                permut_fhs.append(open(fn))
+            except Exception, e:
+                print "Can't open file, skipping it."
+                print str(e)
 
         out_sep = get_sep(args.pval_out.name)
-        ppg_sep = get_sep(args.peaks_per_gene_fn.name)
-        #print "value_s"
-        #print value_s
-        value_s.sort(args.col,ascending=False, inplace=True)
-        #print "value_s"
-        #print value_s
-        top_s = value_s.iloc[:args.top_n]
-        #print "top_s"
-        #print top_s
-        del value_s
-        cand_genes = get_genes(top_s, gene_df, max_dist=args.max_dist)
 
-        print "gene_df"
-        print "gene_df"
-        #save peak info for candidate genes:
-        gene_info = get_gene_info(cand_genes, gene_df)
-        peaks_per_gene = get_peaks(gene_info,top_s,args.max_dist)
-        peaks_per_gene.to_csv(args.peaks_per_gene_fn,sep=ppg_sep)
+        tot_rank = read_table(permut_fhs[0],index_col=0)
+        #missing_idx = gene_to_go.set_index("go_identifier").index.diff(tot_rank.index)
+        #missing_df = pd.DataFrame()
+        for fh in permut_fhs[1:]:
+            rank_table = read_table(fh,index_col=0)
+            tot_rank["rank"] += rank_table["rank"]
+            tot_rank["out_of"] += rank_table["out_of"]
+        
 
-
-        assoc = get_go_assoc(cand_genes, gene_to_cat)
-
-        #print "real_assoc:"
-        #print real_assoc
-        rank_table = get_initial_rank_table(assoc)
-        #if no files are provided we just get the intital rank table
-        tot_rank = total_rank(rank_table, args.permut_fns)
         p_vals = get_p_val(tot_rank)
 
         p_val_df = tot_rank.join(p_vals)
-        p_val_df.sort("p_value",inplace=True)
         p_val_df.index.name = "category"
         if args.cat_to_name_fn is not None:
             cat_to_name = read_table(args.cat_to_name_fn,index_col=[0])
             cat_to_name = cat_to_name.set_index("go_identifier",drop=True)
             p_val_df = p_val_df.join(cat_to_name)
+
+        try:
+            cand_genes = np.unique(read_table(args.peaks_per_gene_fn,usecols=["gene_id"]).values)
+            gene_per_go_s = get_genes_per_go(cand_genes, gene_to_cat)
+            p_val_df = pd.concat([p_val_df, gene_per_go_s], axis=1)
+            def check_len(el):
+                try:
+                    return(len(el))
+                except TypeError:
+                    return 0
+            assert (p_val_df["genes"].apply(check_len) == p_val_df["n_genes"]).all(), \
+                       "genes per category from peaks_per_gene_fn "\
+                       "inconsistent with n_genes reported in assoc_fn: {}".format(p_val_df[(p_val_df["genes"].apply(check_len) != p_val_df["n_genes"])])
+        except NameError, e:
+            print "not adding gene names, no peaks_per_gene_file"
+            print str(e)
+        p_val_df.sort("p_value",inplace=True)
         p_val_df.to_csv(args.pval_out, sep=out_sep)
-        
 
 
-    elif args.mode == "permutation":
-        out_sep = get_sep(args.out_fn.name)
 
-        assoc_table = multiple_permut_assoc(value_s, 
-                                            gene_df,
-                                            gene_to_cat, 
-                                            args.top_n,
-                                            args.max_dist,
-                                            args.n_runs,
-                                            rnd_seed=None)
-        assoc_table.to_csv(args.out_fn,sep=out_sep)
+
 
 
 

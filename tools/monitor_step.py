@@ -47,8 +47,16 @@ def monitor_step(pbs_ids,ana_job_ids,summary_fn,poll_interval=300):
                 ana_job_id = ana_job_ids[pbs_ids.index(id)]
                 #else:
                 #    ana_job_id = base_fn.split("_")[-1] 
-                #append summary 
-                report_dic = {k:qstat_dic[k] for k in summary_stats}
+                #append summary
+                
+                #report_dic = {k:qstat_dic[k] for k in summary_stats}
+                report_dic = {}
+                for k in summary_stats:
+                    try:
+                        report_dic.update({k:qstat_dic[k]})
+                    except KeyError:
+                        print k, "not in qstat_dic:"
+                        print qstat_dic
                 report_dic.update({"ana_job_id":ana_job_id})
                 stat_series = pd.Series(report_dic)
                 try:
