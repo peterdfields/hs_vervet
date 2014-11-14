@@ -22,7 +22,7 @@ def monitor_step(pbs_ids,ana_job_ids,summary_fn,poll_interval=300):
         stat_df.set_index("ana_job_id",drop=False,inplace=True)
     except IOError:
         stat_df = pd.DataFrame(columns=["ana_job_id"]+summary_stats,index=ana_job_ids)
-    
+   
     #with open(summary_fn,"w") as sf:
     #    sf.write("\t".join(["ana_job_id"]+summary_stats)+"\n")
     finished = False
@@ -66,6 +66,8 @@ def monitor_step(pbs_ids,ana_job_ids,summary_fn,poll_interval=300):
                     stat_df = stat_df.append(stat_series)
                 pbs_ids.remove(id)
                 ana_job_ids.remove(ana_job_id)
+            stat_df["qtime"] = stat_df["qtime"].apply(pd.to_datetime)
+            stat_df.sort("qtime", ascending=False, inplace=True)
             stat_df.to_csv(summary_fn,index=False,sep="\t",float_format="%i")
         if pbs_ids:
             time.sleep(poll_interval)

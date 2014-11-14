@@ -91,6 +91,9 @@ def get_genes(peak_s, gene_df, max_dist):
         all_genes += genes
     return all_genes
 
+def get_top_n(value_s,top_q):
+    return int(len(value_s)*top_q)
+
 def permut_assoc(rod_s, rnd, gene_df, gene_to_go, top_n, max_dist):
     """
     This is the main function.
@@ -137,7 +140,7 @@ def get_gene_info(gene_ls,gene_df):
     gi = gene_df[gene_df["gene_id"].apply(lambda x: x in gene_ls)]
     return gi
 
-def get_peaks(gene_info,top_s,max_dist):
+def get_peaks(gene_ls,gene_df,top_s,max_dist):
     """
     For each gene in gene_info get the
     peaks within max_dist in top_s. This 
@@ -152,12 +155,7 @@ def get_peaks(gene_info,top_s,max_dist):
                 and values peak height
     max_dist ... maximum distance between gene and peak
     """
-    #print "gene_info"
-    #print gene_info
-    #print 'top_s'
-    #print top_s
-    #print 'max_dist'
-    #print max_dist
+    gene_info = get_gene_info(gene_ls, gene_df)
     def get_dist(df,gene_pos):
         """
         calculate distance
@@ -186,39 +184,15 @@ def get_peaks(gene_info,top_s,max_dist):
                     apply(lambda df: get_dist(df,
                                               gene_info.ix[chrom].reset_index().set_index("gene_id")["pos"]))
         dist_start.name = "dist_start"
-        #dist_start.columns = ["dist_start"]
         dist_end = x.groupby(lambda i: i[0]).\
                     apply(lambda df: get_dist(df,
                                               gene_info.ix[chrom].set_index("gene_id")["end"]))
         dist_end.name = "dist_end"
-        #dist_end.columns = "dist_end"
-        #the following has problems if there is only a single gene
         gene_peaks_df = pd.concat([x,dist_start,dist_end],axis=1)
-        #gene_peaks_df = x.join(dist_start).join(dist_end)
         gene_peaks_df.index = pd.MultiIndex.from_arrays([gene_peaks_df.index.droplevel(1),
                                          [chrom]*len(x),
                                          gene_peaks_df.index.droplevel(0)])
-        try:
-            tot_gene_peaks_df = pd.concat([tot_gene_peaks_df, gene_peaks_df],axis=0)
-        except:
-            print "loc_top_s"
-            print loc_top_s
-            print "start"
-            print start
-            print "end"
-            print end
-            print "x"
-            print x
-            print "dist_start"
-            print dist_start
-            print "dist_end"
-            print dist_end
-            print "gene_peaks_df"
-            print gene_peaks_df
-            print "gene_info"
-            print gene_info
-            print 'gene_info.ix[chrom].reset_index().set_index("gene_id")["pos"]'
-            print gene_info.ix[chrom].reset_index().set_index("gene_id")["pos"]
+        tot_gene_peaks_df = pd.concat([tot_gene_peaks_df, gene_peaks_df],axis=0)
             
 
     tot_gene_peaks_df.index.names = ["gene_id","chrom","peak_pos"]
@@ -249,12 +223,7 @@ def get_p_val(rank_table):
     Input:
     
     """
-    try:
-        r =  1-rank_table["rank"]*1./(rank_table["out_of"]+1)
-    except:
-        print "rank_table within get_p_val 2"
-        print rank_table
-        raise
+    r =  1-rank_table["rank"]*1./(rank_table["out_of"]+1)
     r.sort()
     r.name = "p_value"
     return r
@@ -264,11 +233,6 @@ def update_rank(rank_table,assoc_table):
     r.index.name = "category"
     return r
 
-#def update_rank(rank_table,permut_assoc_fh):
-#    assoc_table = read_table(permut_assoc_fh,index_col=0)
-#    assert len(assoc_table)>0, "file {} seems to be empty".format(permut_assoc_fh.name)
-#    r = assoc_table.apply(lambda row: get_rank(row,rank_table),axis=1)
-#    return r
 
 
 def total_rank(rank_table, permut_fns):
@@ -278,9 +242,6 @@ def total_rank(rank_table, permut_fns):
     return rt
 
 
-#def save_p_value_total(rank_table, permut_fns):
-    
-    
 def empirical_rank(value,dist):
     """
     get empirical p value of
@@ -414,8 +375,7 @@ if __name__ == "__main__":
             cand_genes = get_genes(top_s, gene_df, max_dist=args.max_dist)
 
             #save peak info for candidate genes:
-            gene_info = get_gene_info(cand_genes, gene_df)
-            peaks_per_gene = get_peaks(gene_info,top_s,args.max_dist)
+            peaks_per_gene = get_peaks(cand_genes,gene_df,top_s,args.max_dist)
             peaks_per_gene.to_csv(args.peaks_per_gene_fn,sep=ppg_sep)
 
             #save list of top peaks
@@ -466,7 +426,19 @@ if __name__ == "__main__":
         #missing_df = pd.DataFrame()
         for fh in permut_fhs[1:]:
             rank_table = read_table(fh,index_col=0)
-            tot_rank["rank"] += rank_table["rank"]
+            #rank_table = rank_table.astype(np.int64)
+            try:
+                tot_rank["rank"] += rank_table["rank"]
+            except:
+                def try_convert(s):
+                    try:
+                        return int(s)
+                    except:
+                        print s
+                        raise
+                print "rank_table"
+                print rank_table["rank"].apply(try_convert)
+                raise
             tot_rank["out_of"] += rank_table["out_of"]
         
 

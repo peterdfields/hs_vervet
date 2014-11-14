@@ -594,7 +594,7 @@ class Step(BaseClass):
                     return True
                 else:
                     return False
-            except KeyError:
+            except (KeyError,ValueError):
                 return False
 
         self.jobs[:] = [job for job in self.jobs if not correctly_finished(job)]
