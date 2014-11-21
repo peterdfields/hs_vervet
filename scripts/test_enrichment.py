@@ -327,7 +327,7 @@ if __name__ == "__main__":
         group.add_argument('--top_q', type=float,help="Input quantile to consider, e.g. 0.01 for top 1%.")
         group.add_argument("--thresh",type=float,help="Set a threshold for peak height. "
                                                       "Enrichment is tested for the peaks with "
-                                                      "value>thresh (or < if acending)"
+                                                      "value>thresh (or < if acending)")
         p.add_argument("--max_dist",type=int, help="Maximum distance (in bp) between gene and rod feature"
                                                     "in order to consider a gene.", required=True)
   
