@@ -124,6 +124,8 @@ def get_go_assoc(gene_ls, gene_to_go):
 def multiple_permut_assoc(rod_s, gene_df, gene_to_go, top_n, max_dist, n_runs, rnd_seed=None):
     if rnd_seed is not None:
         np.random.seed(rnd_seed)
+    if not rod_s.index.is_monotonic:
+        rod_s = rod_s.sort_index()
     assoc_table = pd.concat([permut_assoc(rod_s, rnd, gene_df, gene_to_go, top_n, max_dist) for rnd in np.random.rand(n_runs)],axis=1)
     assoc_table = assoc_table.fillna(0).astype(int)
     #add missing categories to the table (i.e., categories where all permutations have zero hits)
@@ -375,12 +377,12 @@ if __name__ == "__main__":
             top_n = int(len(value_s)*args.top_q)
             print "Using the top", top_n, "peaks."
         else:
-            value_s.sort(ascending=args.ascending)
+            value_s_s = value_s.sort(ascending=args.ascending,inplace=False)
             if args.ascending:
-                top_n = np.argmax(value_s.values>args.thresh)
+                top_n = np.argmax(value_s_s.values>args.thresh)
             else:
-                top_n = np.argmax(value_s.values<args.thresh)
-
+                top_n = np.argmax(value_s_s.values<args.thresh)
+            del value_s_s
 
         if args.mode == "real_assoc":
 
@@ -419,7 +421,7 @@ if __name__ == "__main__":
                                                 args.n_runs,
                                                 rnd_seed=None)
 
-
+            del value_s
             rank_table = update_rank(rank_table,assoc_table)
             
             rank_table = rank_table[["n_genes","rank","out_of"]]
