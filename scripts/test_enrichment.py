@@ -6,15 +6,13 @@ TODO:
 to all assoc_tables, but only add them in the end. (I think the most recent version supports
 this, try it...)
 """
-
-
+from __future__ import print_function 
 import os
 import pandas as pd
 import numpy as np
 eu = os.path.expanduser
 jn = os.path.join
 
-#print pd.__version__
 
 #general I/O functions
 
@@ -34,7 +32,7 @@ def read_table(file_handle,sep=None,**kwargs):
     try:
         return pd.read_csv(file_handle,sep=sep,**kwargs)
     except pd.parser.CParserError:
-        print file_handle
+        print(file_handle)
         raise
     
 
@@ -92,20 +90,19 @@ def get_genes(peak_s, gene_df, max_dist):
         pos_rel_to_start = np.searchsorted(loc_gene_df.index.values-max_dist,peak_s.ix[chrom].index.values)
         pos_rel_to_end = np.searchsorted(loc_gene_df["end"].values+max_dist,peak_s.ix[chrom].index.values)
         genes = list(set(loc_gene_df["gene_id"].iloc[np.hstack([range(a,b) for a,b in zip(pos_rel_to_end,pos_rel_to_start)])]))
-        #print chrom, genes
         all_genes += genes
     return all_genes
 
 def get_top_n(value_s,top_q):
     return int(len(value_s)*top_q)
 
-def permut_assoc(rod_s, rnd, gene_df, gene_to_go, top_n, max_dist):
+def permut_assoc(rod_s, rnd, gene_df, gene_to_go, top_n, max_dist, ascending):
     """
     This is the main function.
     Use with rnd = 0 to get the real assoc.
     """
     s = shift_rod(rod_s, rnd)
-    s.sort(ascending=False, inplace=True)
+    s.sort(ascending=ascending, inplace=True)
     top_s = s.iloc[:top_n]
     cand_genes = get_genes(top_s, gene_df, max_dist=max_dist)
     assoc = get_go_assoc(cand_genes, gene_to_go)
@@ -121,12 +118,13 @@ def get_go_assoc(gene_ls, gene_to_go):
     s.index.name = "category"
     return s
 
-def multiple_permut_assoc(rod_s, gene_df, gene_to_go, top_n, max_dist, n_runs, rnd_seed=None):
+def multiple_permut_assoc(rod_s, gene_df, gene_to_go, top_n, max_dist, n_runs, ascending, rnd_seed=None):
     if rnd_seed is not None:
         np.random.seed(rnd_seed)
     if not rod_s.index.is_monotonic:
         rod_s = rod_s.sort_index()
-    assoc_table = pd.concat([permut_assoc(rod_s, rnd, gene_df, gene_to_go, top_n, max_dist) for rnd in np.random.rand(n_runs)],axis=1)
+    assoc_table = pd.concat([permut_assoc(rod_s, rnd, gene_df, gene_to_go, 
+                                          top_n, max_dist, ascending) for rnd in np.random.rand(n_runs)],axis=1)
     assoc_table = assoc_table.fillna(0).astype(int)
     #add missing categories to the table (i.e., categories where all permutations have zero hits)
     missing_idx = gene_to_go.set_index("go_identifier").index.diff(assoc_table.index)
@@ -294,6 +292,7 @@ if __name__ == "__main__":
                                             help="Filename for file that links genes and"
                                                  " categories. E.g. go associations. Index should be unique.",
                                                     required=True)
+    parser.add_argument("-v","--verbose",type=int,choices=[0,1],default=1)
     subparsers = parser.add_subparsers(dest='mode',help='Mode "permutation" or "reduce"')
 
 
@@ -307,6 +306,7 @@ if __name__ == "__main__":
     parser_0.add_argument("--assoc_fn",type=argparse.FileType('w'),required=True,help="File to write associations"
                                                                                      "per gene.")
     
+    parser_0.add_argument("--log_fn",type=argparse.FileType('w'),help="File to write output log to.")
     ######mode permutation##########
     parser_a = subparsers.add_parser('permutation', help='Do random shifts of input rod and write \n'
                                                          'the results to a file.')
@@ -315,6 +315,7 @@ if __name__ == "__main__":
     parser_a.add_argument("--real_assoc_fn",type=argparse.FileType('r'),required=True,
                                                                 help="File to read real associations"
                                                                                      "from.")
+    parser_a.add_argument("--log_fn",type=argparse.FileType('a'),help="File to append output log to.")
     #####shared by real assoc and permutation#####
     
     for p in [parser_0, parser_a]:
@@ -337,7 +338,11 @@ if __name__ == "__main__":
                                         help="Filename of the gene info dataframe "
                                              " with index (chrom,start) and columns 'gene_id', 'end'",
                                                                 required=True)
-        p.add_argument("--ascending",type=bool,default=False,help="Sort ascending, (e.g., for p-values).")
+        g2 = p.add_mutually_exclusive_group(required=False)
+        g2.add_argument("--ascending",dest="ascending",action="store_true",help="Sort ascending, (e.g., for p-values).")
+        g2.add_argument("--descending",dest="ascending",action="store_false",help="Sort descending, (e.g., for scores).")
+
+        g2.set_defaults(ascending=False)
 
     ######mode reduce##########
     parser_b = subparsers.add_parser('reduce', help='Get rank and p values for real data \n'
@@ -354,9 +359,21 @@ if __name__ == "__main__":
     parser_b.add_argument("--peaks_per_gene_fn",type=argparse.FileType('r'),help="File path of gene info as produced in"
                                                                             " real assoc mode. must have a column gene_id.")
 
-
+    parser_b.add_argument("--log_fn",type=argparse.FileType('w'),help="File to append output log to.")
 
     args = parser.parse_args()
+
+
+    def printv(*text,**kwa):
+        if args.log_fn is not None:
+            print(*text,file=args.log_fn,**kwa)
+        if args.verbose > 0:
+            print(*text,**kwa)
+
+    if args.mode != "permutation":
+        printv("Running",os.path.basename(__file__),"in mode",args.mode,".")
+        printv("Interpreted input arguments as:")
+        printv(args)
 
     gene_to_cat = read_table(args.gene_to_cat_fn,index_col=[0])
 
@@ -375,16 +392,18 @@ if __name__ == "__main__":
 
         elif args.top_q is not None:
             top_n = int(len(value_s)*args.top_q)
-            print "Using the top", top_n, "peaks."
         else:
-            value_s_s = value_s.sort(ascending=args.ascending,inplace=False)
+            value_s_s = value_s.sort(ascending=args.ascending, inplace=False)
             if args.ascending:
                 top_n = np.argmax(value_s_s.values>args.thresh)
             else:
                 top_n = np.argmax(value_s_s.values<args.thresh)
             del value_s_s
+        
 
         if args.mode == "real_assoc":
+
+            printv("Using the top", top_n, "peaks.")
 
             ppg_sep = get_sep(args.peaks_per_gene_fn.name)
             tp_sep = get_sep(args.top_peaks_fn.name)
@@ -419,6 +438,7 @@ if __name__ == "__main__":
                                                 top_n,
                                                 args.max_dist,
                                                 args.n_runs,
+                                                ascending=args.ascending,
                                                 rnd_seed=None)
 
             del value_s
@@ -441,10 +461,10 @@ if __name__ == "__main__":
                 if os.stat(fn).st_size>0:
                     permut_fhs.append(open(fn))
                 else:
-                    print fn, "seems to be empty. Skipping it."
+                    printv(fn, "seems to be empty. Skipping it.")
             except Exception, e:
-                print "Can't open file, skipping it."
-                print str(e)
+                printv("Can't open file, skipping it.")
+                printv(str(e))
 
         out_sep = get_sep(args.pval_out.name)
         sign_out_sep = get_sep(args.pval_sign_out.name)
@@ -480,10 +500,13 @@ if __name__ == "__main__":
                     return(len(el))
                 except TypeError:
                     return 0
-            #assert_df = p_val_df[["n_genes","genes"]]
-            #assert_df["len_genes"] = assert_df["genes"].apply(check_len)
-            #assert_df = assert_df[["n_genes","len_genes","genes"]]
-            #assert (p_val_df["genes"].apply(check_len) == p_val_df["n_genes"]).all(), \
+            if not (p_val_df["genes"].apply(check_len) == p_val_df["n_genes"]).all():
+                assert_df = p_val_df[["n_genes","genes"]]
+                assert_df["len_genes"] = assert_df["genes"].apply(check_len)
+                assert_df = assert_df[["n_genes","len_genes","genes"]]
+                printv("Genes per category from",args.peaks_per_gene_fn,
+                        "inconsistent with n_genes reported in",permut_fhs[0].name,":",
+                        assert_df[assert_df["n_genes"]!=asser_df["len_genes"]])
             #         assert_df[p_val_df["genes"].apply(check_len) != p_val_df["n_genes"]]
                      #  "genes per category from peaks_per_gene_fn "\
                       # "inconsistent with n_genes reported in assoc_fn: {}. "\
@@ -493,8 +516,8 @@ if __name__ == "__main__":
                        #        p_val_df[(p_val_df["genes"].apply(check_len) != p_val_df["n_genes"])]["genes"].apply(check_len),
                        #         list(p_val_df[(p_val_df["genes"].apply(check_len) != p_val_df["n_genes"])]["genes"].values))
         except NameError, e:
-            print "not adding gene names, no peaks_per_gene_file"
-            print str(e)
+            printv("not adding gene names, no peaks_per_gene_file")
+            printv(str(e))
         p_val_df[["n_genes","rank","out_of"]] = p_val_df[["n_genes","rank","out_of"]].astype(int)
         p_val_df.sort(["p_value", "n_genes"],inplace=True,ascending=[True, False])
         p_val_df["benjamini_hochberg"] = p_val_df["p_value"]*len(p_val_df)/np.arange(1,len(p_val_df)+1)
@@ -504,7 +527,9 @@ if __name__ == "__main__":
         if args.pval_out is not None:
             p_val_df.to_csv(args.pval_out, sep=out_sep)
         if args.pval_sign_out is not None:
-            p_val_df[p_val_df["p_value"]<args.pval_sign_thresh].to_csv(args.pval_sign_out, sep=sign_out_sep)           
+            sign_p_val = p_val_df[p_val_df["p_value"]<args.pval_sign_thresh]
+            sign_p_val.to_csv(args.pval_sign_out, sep=sign_out_sep)
+            printv("Found",len(sign_p_val),"associations above p_value of",args.pval_sign_thresh)
 
 
 

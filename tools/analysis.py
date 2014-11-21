@@ -229,7 +229,7 @@ class Analysis(BaseClass):
     """
     def __init__(self, name, project,mendel_project=None,
                     ana_dir="analyses",
-                    default_run = None,description=None,verbose=0):
+                    default_run = None,description=None,verbose=1):
                 #,
                 #these options are depreciated, use the arguments above
                 #project_dir="~/vervet_project",
