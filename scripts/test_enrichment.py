@@ -325,6 +325,9 @@ if __name__ == "__main__":
         group = p.add_mutually_exclusive_group(required=True)
         group.add_argument("--top_n",type=int, help="Number of top values of the input rod to consider.")
         group.add_argument('--top_q', type=float,help="Input quantile to consider, e.g. 0.01 for top 1%.")
+        group.add_argument("--thresh",type=float,help="Set a threshold for peak height. "
+                                                      "Enrichment is tested for the peaks with "
+                                                      "value>thresh (or < if acending)"
         p.add_argument("--max_dist",type=int, help="Maximum distance (in bp) between gene and rod feature"
                                                     "in order to consider a gene.", required=True)
   
@@ -332,7 +335,7 @@ if __name__ == "__main__":
                                         help="Filename of the gene info dataframe "
                                              " with index (chrom,start) and columns 'gene_id', 'end'",
                                                                 required=True)
-
+        p.add_argument("--ascending",type=bool,default=False,help="Sort ascending, (e.g., for p-values)."
 
     ######mode reduce##########
     parser_b = subparsers.add_parser('reduce', help='Get rank and p values for real data \n'
@@ -363,15 +366,21 @@ if __name__ == "__main__":
                                                     squeeze=True)
         assert isinstance(value_s,pd.core.series.Series)
 
-        #try:
+        gene_df = read_table(args.gene_df_fn,index_col=[0,1])
+
         if args.top_n is not None:
             top_n = args.top_n
-        #except NameError:
-        else:
+
+        elif args.top_q is not None:
             top_n = int(len(value_s)*args.top_q)
             print "Using the top", top_n, "peaks."
+        else:
+            value_s.sort(ascending=args.ascending)
+            if args.ascending:
+                top_n = np.argmax(value_s.values>args.thresh)
+            else:
+                top_n = np.argmax(value_s.values<args.thresh)
 
-        gene_df = read_table(args.gene_df_fn,index_col=[0,1])
 
         if args.mode == "real_assoc":
 
@@ -379,7 +388,7 @@ if __name__ == "__main__":
             tp_sep = get_sep(args.top_peaks_fn.name)
             assoc_sep = get_sep(args.assoc_fn.name)
            
-            value_s = value_s.sort(ascending=False, inplace=False)
+            value_s = value_s.sort(ascending=args.ascending, inplace=False)
             top_s = value_s.iloc[:top_n]
             del value_s
             cand_genes = get_genes(top_s, gene_df, max_dist=args.max_dist)
