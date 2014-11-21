@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """
 TODO:
--value_s not needed in mode reduce, don't requre it and load it
 -similar case with other parameters
 -it would save disk space if we do not add go categories with 0 genes
-to all assoc_tables, but only add them in the end.
+to all assoc_tables, but only add them in the end. (I think the most recent version supports
+this, try it...)
 """
 
 
@@ -31,7 +31,12 @@ def get_sep(fn):
 def read_table(file_handle,sep=None,**kwargs):
     if sep is None:
         sep = get_sep(file_handle.name)
-    return pd.read_csv(file_handle,sep=sep,**kwargs)
+    try:
+        return pd.read_csv(file_handle,sep=sep,**kwargs)
+    except pd.parser.CParserError:
+        print file_handle
+        raise
+    
 
 
 #these functions are needed in all modes
@@ -200,11 +205,12 @@ def get_peaks(gene_ls,gene_df,top_s,max_dist):
 
 
 def get_peak_info(top_s,peaks_per_gene):
+    peak_height_name = top_s.name
     gene_list_peak_pos = peaks_per_gene.reset_index([0])["gene_id"].groupby(lambda x: x).apply(list)
     gene_list_peak_pos.name = "genes"
     gene_list_peak_pos.index = pd.MultiIndex.from_tuples(gene_list_peak_pos.index)
     peak_info = pd.concat([top_s,gene_list_peak_pos],axis=1)
-    peak_info.sort("Likelihood",ascending=False,inplace=True)
+    peak_info.sort(peak_height_name,ascending=False,inplace=True)
     peak_info.index.names = ["chrom","pos"]
     return peak_info
 
@@ -334,8 +340,12 @@ if __name__ == "__main__":
     parser_b.add_argument("--permut_fns",nargs='*',default=None,type=str)#type=argparse.FileType('r'))
     parser_b.add_argument("--cat_to_name_fn",default=None,type=argparse.FileType('r'),help="Table that maps categories"
                                                                                       "to category descriptions.")
-    parser_b.add_argument("--pval_out",type=argparse.FileType('w'),required=True,help="File to write enrichment p_values to.")
+    parser_b.add_argument("--pval_out",type=argparse.FileType('w'),help="File to write enrichment p_values to.")
     
+    parser_b.add_argument("--pval_sign_out",type=argparse.FileType('w'),
+                                                        help="File to write significant enrichment p_values to.")
+    parser_b.add_argument("--pval_sign_thresh",type=float,
+                                                        help="P value threhold for pval_sign_out.")
     parser_b.add_argument("--peaks_per_gene_fn",type=argparse.FileType('r'),help="File path of gene info as produced in"
                                                                             " real assoc mode. must have a column gene_id.")
 
@@ -408,39 +418,39 @@ if __name__ == "__main__":
             rank_table.to_csv(args.out_fn,sep=out_sep)
 
     elif args.mode == "reduce":
+        
+        if args.pval_sign_out is not None:
+            assert args.pval_sign_thresh is not None, "specify argument pval_sign_thresh or remove argument pval_sign_out "
         if args.permut_fns is None:
             args.permut_fns = []
         
         permut_fhs = []
         for fn in args.permut_fns:
             try:
-                permut_fhs.append(open(fn))
+                if os.stat(fn).st_size>0:
+                    permut_fhs.append(open(fn))
+                else:
+                    print fn, "seems to be empty. Skipping it."
             except Exception, e:
                 print "Can't open file, skipping it."
                 print str(e)
 
         out_sep = get_sep(args.pval_out.name)
-
-        tot_rank = read_table(permut_fhs[0],index_col=0)
-        #missing_idx = gene_to_go.set_index("go_identifier").index.diff(tot_rank.index)
-        #missing_df = pd.DataFrame()
-        for fh in permut_fhs[1:]:
-            rank_table = read_table(fh,index_col=0)
-            #rank_table = rank_table.astype(np.int64)
-            try:
-                tot_rank["rank"] += rank_table["rank"]
-            except:
-                def try_convert(s):
-                    try:
-                        return int(s)
-                    except:
-                        print s
-                        raise
-                print "rank_table"
-                print rank_table["rank"].apply(try_convert)
-                raise
-            tot_rank["out_of"] += rank_table["out_of"]
+        sign_out_sep = get_sep(args.pval_sign_out.name)
+        tot_rank = read_table(permut_fhs[0],index_col=0).dropna()
+        tot_rank["index"] = tot_rank.index
+        tot_rank.drop_duplicates(cols="index",inplace=True)
+        del tot_rank["index"]
         
+        for fh in permut_fhs[1:]:
+            rank_table = read_table(fh,index_col=0).dropna()
+            rank_table["index"] = rank_table.index
+            rank_table.drop_duplicates(cols="index",inplace=True)
+            try:
+                tot_rank["rank"] = tot_rank["rank"].add(rank_table["rank"],fill_value=0)
+                tot_rank["out_of"] = tot_rank["out_of"].add(rank_table["out_of"],fill_value=0)
+            except:
+                raise
 
         p_vals = get_p_val(tot_rank)
 
@@ -450,7 +460,6 @@ if __name__ == "__main__":
             cat_to_name = read_table(args.cat_to_name_fn,index_col=[0])
             cat_to_name = cat_to_name.set_index("go_identifier",drop=True)
             p_val_df = p_val_df.join(cat_to_name)
-
         try:
             cand_genes = np.unique(read_table(args.peaks_per_gene_fn,usecols=["gene_id"]).values)
             gene_per_go_s = get_genes_per_go(cand_genes, gene_to_cat)
@@ -460,14 +469,31 @@ if __name__ == "__main__":
                     return(len(el))
                 except TypeError:
                     return 0
-            assert (p_val_df["genes"].apply(check_len) == p_val_df["n_genes"]).all(), \
-                       "genes per category from peaks_per_gene_fn "\
-                       "inconsistent with n_genes reported in assoc_fn: {}".format(p_val_df[(p_val_df["genes"].apply(check_len) != p_val_df["n_genes"])])
+            #assert_df = p_val_df[["n_genes","genes"]]
+            #assert_df["len_genes"] = assert_df["genes"].apply(check_len)
+            #assert_df = assert_df[["n_genes","len_genes","genes"]]
+            #assert (p_val_df["genes"].apply(check_len) == p_val_df["n_genes"]).all(), \
+            #         assert_df[p_val_df["genes"].apply(check_len) != p_val_df["n_genes"]]
+                     #  "genes per category from peaks_per_gene_fn "\
+                      # "inconsistent with n_genes reported in assoc_fn: {}. "\
+                      #  "Files used are {} and {}. Len of gene lists are {}. Entries are {}"\
+                       #.format(p_val_df[(p_val_df["genes"].apply(check_len) != p_val_df["n_genes"])],
+                       #        permut_fhs[0], args.peaks_per_gene_fn,
+                       #        p_val_df[(p_val_df["genes"].apply(check_len) != p_val_df["n_genes"])]["genes"].apply(check_len),
+                       #         list(p_val_df[(p_val_df["genes"].apply(check_len) != p_val_df["n_genes"])]["genes"].values))
         except NameError, e:
             print "not adding gene names, no peaks_per_gene_file"
             print str(e)
-        p_val_df.sort("p_value",inplace=True)
-        p_val_df.to_csv(args.pval_out, sep=out_sep)
+        p_val_df[["n_genes","rank","out_of"]] = p_val_df[["n_genes","rank","out_of"]].astype(int)
+        p_val_df.sort(["p_value", "n_genes"],inplace=True,ascending=[True, False])
+        p_val_df["benjamini_hochberg"] = p_val_df["p_value"]*len(p_val_df)/np.arange(1,len(p_val_df)+1)
+        c = list(p_val_df.columns.values)
+        p_val_df = p_val_df[c[:-3] + [c[-1]] + c[-3:-1]]
+        p_val_df.index.name = "category"
+        if args.pval_out is not None:
+            p_val_df.to_csv(args.pval_out, sep=out_sep)
+        if args.pval_sign_out is not None:
+            p_val_df[p_val_df["p_value"]<args.pval_sign_thresh].to_csv(args.pval_sign_out, sep=sign_out_sep)           
 
 
 
