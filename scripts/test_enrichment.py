@@ -335,7 +335,7 @@ if __name__ == "__main__":
                                         help="Filename of the gene info dataframe "
                                              " with index (chrom,start) and columns 'gene_id', 'end'",
                                                                 required=True)
-        p.add_argument("--ascending",type=bool,default=False,help="Sort ascending, (e.g., for p-values)."
+        p.add_argument("--ascending",type=bool,default=False,help="Sort ascending, (e.g., for p-values).")
 
     ######mode reduce##########
     parser_b = subparsers.add_parser('reduce', help='Get rank and p values for real data \n'
