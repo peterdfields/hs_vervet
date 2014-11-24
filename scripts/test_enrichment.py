@@ -322,9 +322,10 @@ if __name__ == "__main__":
         p.add_argument("--in_rod",type=argparse.FileType('r'),
                                      help="Input reference ordered data containing the values per position.",
                                         required=True)
-        p.add_argument("--col",type=str,help="Column label of the input table that contains the values"
-                                                    " by which the rod positions should be ranked",
-                                                                                    required=True)
+        p.add_argument("--cols",type=str, nargs=3, help="Column labels or positions of [chrom pos value]. "
+                                                        "Expects three "
+                                                        " integers or three strings.",
+                                                                                   required=True)
         group = p.add_mutually_exclusive_group(required=True)
         group.add_argument("--top_n",type=int, help="Number of top values of the input rod to consider.")
         group.add_argument('--top_q', type=float,help="Input quantile to consider, e.g. 0.01 for top 1%.")
@@ -371,7 +372,7 @@ if __name__ == "__main__":
             print(*text,**kwa)
 
     if args.mode != "permutation":
-        printv("Running",os.path.basename(__file__),"in mode",args.mode,".")
+        printv("Running",os.path.basename(__file__),"in mode",args.mode+".")
         printv("Interpreted input arguments as:")
         printv(args)
 
@@ -380,9 +381,13 @@ if __name__ == "__main__":
 
     if args.mode == "real_assoc" or args.mode == "permutation":
         #get data
+        try:
+            cols = [int(i) for i in args.cols]
+        except ValueError:
+            cols = args.cols
         value_s = read_table(args.in_rod,index_col=[0,1],
-                            usecols=["chrom", "pos", args.col],
-                                                    squeeze=True)
+                                    usecols=cols, squeeze=True)
+        value_s.index.names = ["chrom","pos"]
         assert isinstance(value_s,pd.core.series.Series)
 
         gene_df = read_table(args.gene_df_fn,index_col=[0,1])
@@ -470,7 +475,7 @@ if __name__ == "__main__":
         sign_out_sep = get_sep(args.pval_sign_out.name)
         tot_rank = read_table(permut_fhs[0],index_col=0).dropna()
         tot_rank["index"] = tot_rank.index
-        tot_rank.drop_duplicates(cols="index",inplace=True)
+        tot_rank.drop_duplicates(subset="index",inplace=True)
         del tot_rank["index"]
         
         for fh in permut_fhs[1:]:
@@ -506,7 +511,7 @@ if __name__ == "__main__":
                 assert_df = assert_df[["n_genes","len_genes","genes"]]
                 printv("Genes per category from",args.peaks_per_gene_fn,
                         "inconsistent with n_genes reported in",permut_fhs[0].name,":",
-                        assert_df[assert_df["n_genes"]!=asser_df["len_genes"]])
+                        assert_df[assert_df["n_genes"]!=assert_df["len_genes"]])
             #         assert_df[p_val_df["genes"].apply(check_len) != p_val_df["n_genes"]]
                      #  "genes per category from peaks_per_gene_fn "\
                       # "inconsistent with n_genes reported in assoc_fn: {}. "\

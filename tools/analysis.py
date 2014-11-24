@@ -647,8 +647,15 @@ class JoinedStep(Step):
 
 
 class Job(BaseClass):
-    def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, step = None, analysis_step = None,append_to_ana=True, id='', depends=None, input_files=None, output_files=None, walltime='04:00:00',ncpus=1,pbs_lines=None, mem=None, exit_on_error=True, description=None, debug=False, verbose=None):
-        self.depends = ([] if depends is None else depends)
+    def __init__(self,commands=None, modules=None,cluster_modules=None,local_modules=None,cluster_commands=None, local_commands=None, step = None, analysis_step = None,append_to_ana=True, id='', depends=None, afterok=None, afterany=None, input_files=None, output_files=None, walltime='04:00:00',ncpus=1,pbs_lines=None, mem=None, exit_on_error=True, description=None, debug=False, verbose=None):
+        if depends is not None:
+            UserWarning("depends is depreciated, use afterany or afterok. "
+                       "Assuming depends should be afterok.")
+        depends0 = ([] if depends is None else depends)
+        
+        self.afterok = ([] if afterok is None else afterok)
+        self.afterok += depends0
+        self.afterany = ([] if afterany is None else afterany)
         self.input_files = ([] if input_files is None else input_files)
         self.output_files = ([] if output_files is None else output_files)
         self.walltime = walltime
@@ -836,26 +843,42 @@ class Job(BaseClass):
         
 
     def qsub_jobscript(self):
-        depend_str=''
-        if self.depends:
-            for depend in self.depends:
-                if type(depend) == str:
-                    pbs_id = depend.strip()
-                else:
-                    if depend.pbs_id == None:
-                        raise Exception("{0} depending on {1}. Qsub {0} before \n"
-                        "submitting {1}.".format(depend.step.name+'_'+depend.id,
-                                                    self.step.name+'_'+self.id))
-                    pbs_id = depend.pbs_id.strip()     
-                depend_str = depend_str + (':' if len(depend_str)>0 else '') + pbs_id 
-            command = 'qsub -h  -W depend=afterok:{0} {1}'.format(depend_str,
-                                                       os.path.expanduser(self.file_name)+self.ext)
-            p = subprocess.Popen(command, shell=True, 
+        afterok_str = ''
+        for depend in self.afterok:
+            if type(depend) == str:
+                pbs_id = depend.strip()
+            else:
+                if depend.pbs_id == None:
+                    raise Exception("{0} depending on {1}. Qsub {0} before \n"
+                    "submitting {1}.".format(depend.step.name+'_'+depend.id,
+                                                self.step.name+'_'+self.id))
+                pbs_id = depend.pbs_id.strip()
+            afterok_str = afterok_str + (':' if len(afterok_str)>0 else '') + pbs_id 
+        afterok_str = ("afterok:"+afterok_str) if afterok_str else ""
+        afterany_str = ''
+        for depend in self.afterany:
+            if type(depend) == str:
+                pbs_id = depend.strip()
+            else:
+                if depend.pbs_id == None:
+                    raise Exception("{0} depending on {1}. Qsub {0} before \n"
+                    "submitting {1}.".format(depend.step.name+'_'+depend.id,
+                                                self.step.name+'_'+self.id))
+                pbs_id = depend.pbs_id.strip()
+            afterany_str = afterany_str + (':' if len(afterany_str)>0 else '') + pbs_id 
+        afterany_str = ("afterany:"+afterany_str) if afterany_str else ""
+        
+        depend_str = ("-W depend=" if afterok_str or afterany_str else "")
+        depend_str += (afterok_str + \
+                        ("," if afterok_str and afterany_str else "") + \
+                                                               afterany_str)
+
+
+        command = 'qsub -h {0} {1}'.format(depend_str,
+                                           os.path.expanduser(self.file_name)+self.ext)
+        p = subprocess.Popen(command, shell=True, 
                                  stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        else:
-            command = 'qsub -h {0}'.format(os.path.expanduser(self.file_name)+self.ext)
-            p = subprocess.Popen(command, shell=True,
-                                   stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        
         out, err = p.communicate()
         self.pbs_id = out.strip() 
         self.analysis.append_submit_log(command, out, err)
@@ -877,7 +900,7 @@ class Job(BaseClass):
         
     def execute(self,command):
         import select
-        for depend_job in self.depends:
+        for depend_job in self.afterok:
             if depend_job.returncode != 0:
                 raise Exception("{0} finished with exit code {1}, won't start {2}."
                                 "".format(depend_job.name,depend_job.returncode,
