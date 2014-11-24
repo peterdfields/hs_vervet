@@ -134,19 +134,19 @@ def multiple_permut_assoc(rod_s, gene_df, gene_to_go, top_n, max_dist, n_runs, a
     assoc_table = pd.concat([assoc_table,missing_df])
     return assoc_table
 
-def multiple_permut_assoc_low_mem(rod_s, gene_df, gene_to_go, top_n, max_dist, n_runs, ascending, rnd_seed=None):
+def multiple_permut_assoc_low_mem(rod_s, init_rank_table, gene_df, gene_to_go, top_n, max_dist, n_runs, ascending, rnd_seed=None):
     if rnd_seed is not None:
         np.random.seed(rnd_seed)
     if not rod_s.index.is_monotonic:
         rod_s = rod_s.sort_index()
-    assoc_table = pd.concat([permut_assoc(rod_s, rnd, gene_df, gene_to_go, 
-                                          top_n, max_dist, ascending) for rnd in np.random.rand(n_runs)],axis=1)
-    assoc_table = assoc_table.fillna(0).astype(int)
-    #add missing categories to the table (i.e., categories where all permutations have zero hits)
-    missing_idx = gene_to_go.set_index("go_identifier").index.diff(assoc_table.index)
-    missing_df = pd.DataFrame(0,index=missing_idx,columns=assoc_table.columns)
-    assoc_table = pd.concat([assoc_table,missing_df])
-    return assoc_table
+    for rnd in np.random.rand(n_runs):
+        assoc = permut_assoc(rod_s, rnd, gene_df, gene_to_go, 
+                                       top_n, max_dist, ascending)
+        init_rank_table["rank"] += (init_rank_table["n_genes"] > \
+                                    assoc.reindex(init_rank_table.index).fillna(0))
+        init_rank_table["out_of"] += 1
+
+    return init_rank_table
 
 def save_permut_assoc_table(assoc_table,fn):
     assoc_table.to_csv(fn)
