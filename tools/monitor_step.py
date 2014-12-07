@@ -64,6 +64,9 @@ def monitor_step(pbs_ids,ana_job_ids,summary_fn,poll_interval=300):
                 except KeyError:
                     stat_series.name = ana_job_id
                     stat_df = stat_df.append(stat_series)
+                except Exception,e:
+                    print stat_df
+                    print str(e)
                 pbs_ids.remove(id)
                 ana_job_ids.remove(ana_job_id)
             stat_df["qtime"] = stat_df["qtime"].apply(pd.to_datetime)

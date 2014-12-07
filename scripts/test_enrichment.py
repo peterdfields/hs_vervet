@@ -10,6 +10,7 @@ from __future__ import print_function
 import os
 import pandas as pd
 import numpy as np
+import gc
 eu = os.path.expanduser
 jn = os.path.join
 
@@ -103,7 +104,10 @@ def permut_assoc(rod_s, rnd, gene_df, gene_to_go, top_n, max_dist, ascending):
     """
     s = shift_rod(rod_s, rnd)
     s.sort(ascending=ascending, inplace=True)
-    top_s = s.iloc[:top_n]
+    top_s = s.iloc[:top_n].copy()
+    del s
+    gc.collect() #otherwise memory seems to leak
+    #print(gc.garbage)
     cand_genes = get_genes(top_s, gene_df, max_dist=max_dist)
     assoc = get_go_assoc(cand_genes, gene_to_go)
     return assoc
@@ -145,7 +149,7 @@ def multiple_permut_assoc_low_mem(rod_s, init_rank_table, gene_df, gene_to_go, t
         init_rank_table["rank"] += (init_rank_table["n_genes"] > \
                                     assoc.reindex(init_rank_table.index).fillna(0))
         init_rank_table["out_of"] += 1
-
+        
     return init_rank_table
 
 def save_permut_assoc_table(assoc_table,fn):
@@ -300,29 +304,38 @@ if __name__ == "__main__":
     import argparse
     import pdb
 
-    parser = argparse.ArgumentParser(description="Test enrichment of genes in certain categories "
-                                                 "compared to the empirical distribution\n "
-                                                 "of genes per category, produced by \n "
-                                                 "shifting (rotating) the input data across the genome.")
-    parser.add_argument("--gene_to_cat_fn",type=argparse.FileType('r'),
-                                            help="Filename for file that links genes and"
-                                                 " categories. E.g. go associations. Index should be unique.",
-                                                    required=True)
-    parser.add_argument("-v","--verbose",type=int,choices=[0,1],default=1)
-    subparsers = parser.add_subparsers(dest='mode',help='Mode "permutation" or "reduce"')
+    parser = argparse.ArgumentParser(description=
+                                      "Test enrichment of genes in certain categories "
+                                      "compared to the empirical distribution\n "
+                                      "of genes per category, produced by \n "
+                                      "shifting (rotating) the input data across "
+                                                                        "the genome.")
+    parser.add_argument("--gene_to_cat_fn", type=argparse.FileType('r'),
+                                     help="Filename for file that links genes and"
+                                          " categories. E.g. go associations. "
+                                          "Index should be unique.",
+                                                                        required=True)
+    parser.add_argument("-v","--verbose",
+                            type=int,choices=[0,1],default=1)
+    subparsers = parser.add_subparsers(dest='mode',
+                                        help='Mode "real_assoc", "permutation" or "reduce"')
 
 
     #######mode real assoc##########
-    parser_0 = subparsers.add_parser('real_assoc', help='Get assocications for the real original'
-                                                        ' data set and save them.')
-    parser_0.add_argument("--peaks_per_gene_fn",type=argparse.FileType('w'),required=True,
-                                                                help="File to write peak info for each gene.")
+    parser_0 = subparsers.add_parser('real_assoc', 
+                                      help='Get assocications for the real original'
+                                                          ' data set and save them.')
+    parser_0.add_argument("--peaks_per_gene_fn",type=argparse.FileType('w'),
+                            required=True,
+                                   help="File to write peak info for each gene.")
     parser_0.add_argument("--top_peaks_fn",type=argparse.FileType('w'),required=True,
-                                                                help="File to write top peak info.")
-    parser_0.add_argument("--assoc_fn",type=argparse.FileType('w'),required=True,help="File to write associations"
-                                                                                     "per gene.")
+                                                  help="File to write top peak info.")
+    parser_0.add_argument("--assoc_fn",type=argparse.FileType('w'),
+                            required=True,help="File to write associations"
+                                                                   "per gene.")
     
-    parser_0.add_argument("--log_fn",type=argparse.FileType('w'),help="File to write output log to.")
+    parser_0.add_argument("--log_fn",type=argparse.FileType('w'),
+                                    help="File to write output log to.")
     ######mode permutation##########
     parser_a = subparsers.add_parser('permutation', help='Do random shifts of input rod and write \n'
                                                          'the results to a file.')
@@ -453,7 +466,7 @@ if __name__ == "__main__":
             
             rank_table = get_initial_rank_table(real_assoc)
 
-            assoc_table = multiple_permut_assoc(value_s, 
+            rank_table = multiple_permut_assoc_low_mem(value_s, rank_table,
                                                 gene_df,
                                                 gene_to_cat, 
                                                 top_n,
@@ -463,10 +476,8 @@ if __name__ == "__main__":
                                                 rnd_seed=None)
 
             del value_s
-            rank_table = update_rank(rank_table,assoc_table)
-            
+            #rank_table = update_rank(rank_table,assoc_table)
             rank_table = rank_table[["n_genes","rank","out_of"]]
-                   
             rank_table.to_csv(args.out_fn,sep=out_sep)
 
     elif args.mode == "reduce":
@@ -497,7 +508,7 @@ if __name__ == "__main__":
         for fh in permut_fhs[1:]:
             rank_table = read_table(fh,index_col=0).dropna()
             rank_table["index"] = rank_table.index
-            rank_table.drop_duplicates(cols="index",inplace=True)
+            rank_table.drop_duplicates(subset="index",inplace=True)
             try:
                 tot_rank["rank"] = tot_rank["rank"].add(rank_table["rank"],fill_value=0)
                 tot_rank["out_of"] = tot_rank["out_of"].add(rank_table["out_of"],fill_value=0)
@@ -512,6 +523,8 @@ if __name__ == "__main__":
             cat_to_name = read_table(args.cat_to_name_fn,index_col=[0])
             cat_to_name = cat_to_name.set_index("go_identifier",drop=True)
             p_val_df = p_val_df.join(cat_to_name)
+
+        # get a list of genes per go category
         try:
             cand_genes = np.unique(read_table(args.peaks_per_gene_fn,usecols=["gene_id"]).values)
             gene_per_go_s = get_genes_per_go(cand_genes, gene_to_cat)
@@ -528,20 +541,15 @@ if __name__ == "__main__":
                 printv("Genes per category from",args.peaks_per_gene_fn,
                         "inconsistent with n_genes reported in",permut_fhs[0].name,":",
                         assert_df[assert_df["n_genes"]!=assert_df["len_genes"]])
-            #         assert_df[p_val_df["genes"].apply(check_len) != p_val_df["n_genes"]]
-                     #  "genes per category from peaks_per_gene_fn "\
-                      # "inconsistent with n_genes reported in assoc_fn: {}. "\
-                      #  "Files used are {} and {}. Len of gene lists are {}. Entries are {}"\
-                       #.format(p_val_df[(p_val_df["genes"].apply(check_len) != p_val_df["n_genes"])],
-                       #        permut_fhs[0], args.peaks_per_gene_fn,
-                       #        p_val_df[(p_val_df["genes"].apply(check_len) != p_val_df["n_genes"])]["genes"].apply(check_len),
-                       #         list(p_val_df[(p_val_df["genes"].apply(check_len) != p_val_df["n_genes"])]["genes"].values))
         except NameError, e:
             printv("not adding gene names, no peaks_per_gene_file")
             printv(str(e))
+
         p_val_df[["n_genes","rank","out_of"]] = p_val_df[["n_genes","rank","out_of"]].astype(int)
         p_val_df.sort(["p_value", "n_genes"],inplace=True,ascending=[True, False])
-        p_val_df["benjamini_hochberg"] = p_val_df["p_value"]*len(p_val_df)/np.arange(1,len(p_val_df)+1)
+        p_val_df["benjamini_hochberg"] = p_val_df["p_value"] * \
+                                        len(gene_to_cat["go_identifier"].unique()) /\
+                                        np.arange(1,len(p_val_df)+1)
         c = list(p_val_df.columns.values)
         p_val_df = p_val_df[c[:-3] + [c[-1]] + c[-3:-1]]
         p_val_df.index.name = "category"
