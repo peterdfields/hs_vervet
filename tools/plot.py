@@ -82,7 +82,7 @@ def plot_single_2d_sfs(sfs, vmin=None, vmax=None, ax=None,
                        norm=norm)
     #hs
     try:
-        ax.figure.colorbar(mappable, extend=extend, format=format)
+        colorbar = ax.figure.colorbar(mappable, extend=extend, format=format)
     except:
         print numpy.ma.masked_where(sfs<vmin, sfs)
         print vmin
@@ -116,6 +116,6 @@ def plot_single_2d_sfs(sfs, vmin=None, vmax=None, ax=None,
 
     ax.set_xlim(0, sfs.shape[1])
     ax.set_ylim(0, sfs.shape[0])
-
+    return colorbar
 
 
