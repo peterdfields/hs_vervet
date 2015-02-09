@@ -154,20 +154,23 @@ def msmc_input_parse_fun(d, tsv_fhs, p, h, ind_tuples,haplotypes):
 #--------------
 
 
-def add_outgroup_header(line, out_vcf_fh,*args):
+def add_outgroup_header(line, out_vcf_fh,*args, **kwa):
     #if line[:6]=='#CHROM':
     #    line = line.strip() + "\t" + sample_name + '\n'
     out_vcf_fh.write(line)
 
 
 
-def add_outgroup_parse_fun(line,out_vcf_fh, *args,og_fasta=og_fasta):
+def add_outgroup_parse_fun(line,out_vcf_fh, *args,**kwa):
     bases = ["A",'C','T','G']
     no_var = ['.','X']
-    og_base = og_fasta[line[0]][line[1]-1]
-    if line[4] == in novar and og_base.upper() in bases:
+    og_base = og_fasta[line[0]][int(line[1])-1]
+    if line[4] in no_var and og_base.upper() in bases and og_base.upper() != line[3]:
         line[4] = og_base.upper()
-    out_vcf_fh.write("\t".join(line))
+        #print "added SNP at", line[0], line[1]
+    #print out_vcf_fh
+    #print "\t".join(line)
+    out_vcf_fh.write("\t".join(line)+'\n')
 
 if __name__ == "__main__":
     import argparse
@@ -213,8 +216,7 @@ if __name__ == "__main__":
                                                                     "Read function docu for "
                                                                     "more info.")
 
-    parser3.add_argument("--in_fasta", default = '-',
-                                                help="Genotypes to be added into VCF.")
+    parser3.add_argument("--in_fasta",help="Differences to be added as SNPs into VCF.")
 
     #parser3.add_argument("--sample_name",help="Name of the sample to be added.")
 
@@ -223,18 +225,20 @@ if __name__ == "__main__":
     #    print k,v,
     if args.mode == "to012":
         generic_parser(vcf_to_012_parse_fun,vcf_to_012_header,
-                                        args.in_vcf, args.out_fn,no_skip_multiple_entries)
+                                        args.in_vcf, args.out_fn,args.no_skip_multiple_entries)
     elif args.mode == "ref_alt_anc":
         generic_parser(ref_alt_anc_parse_fun, ref_alt_anc_header,
-                                           args.in_vcf, args.out_fn,no_skip_multiple_entries)
+                                           args.in_vcf, args.out_fn,args.no_skip_multiple_entries)
     elif args.mode == "msmc":
         out_fns = [args.out_fn] if args.add_out_fns is None else [args.out_fn]+args.add_out_fns
         assert len(out_fns) == len(args.ind_tuples), "There are {} out files but {} tuples.".format(len(out_fns),len(args.ind_tuples))
-        generic_parser(msmc_input_parse_fun, msmc_header, args.in_vcf, out_fns,no_skip_multiple_entries,
+        generic_parser(msmc_input_parse_fun, msmc_header, args.in_vcf, out_fns,args.no_skip_multiple_entries,
                                                 ind_tuples = [it.split() for it in args.ind_tuples],
                                                                                haplotypes=args.haplotypes)
     elif args.mode == "add_outgroup_from_fasta":
         import pyfasta
         og_fasta = pyfasta.Fasta(args.in_fasta)
+        generic_parser(add_outgroup_parse_fun, add_outgroup_header,  args.in_vcf, args.out_fn,
+                                                args.no_skip_multiple_entries, og_fasta=og_fasta)
     else:
         raise UserException("Unknown mode.")
