@@ -77,9 +77,15 @@ def plot_single_2d_sfs(sfs, vmin=None, vmax=None, ax=None,
         norm = matplotlib.colors.Normalize(vmin=vmin*(1-1e-3),
                                            vmax=vmax*(1+1e-3))
         format = None
+    #mappable=ax.pcolor(numpy.ma.masked_where(sfs<vmin, sfs),
+    #                   cmap=pylab.cm.hsv, shading='flat',
+    #                   norm=norm)
     mappable=ax.pcolor(numpy.ma.masked_where(sfs<vmin, sfs),
                        cmap=pylab.cm.hsv, shading='flat',
-                       norm=norm)
+                       norm=norm,edgecolor='face')
+    #edgecolor='face' is needed to avoid lines between color fields when 
+    #exporting as transparend svg
+    print "latest1"
     #hs
     try:
         colorbar = ax.figure.colorbar(mappable, extend=extend, format=format)
@@ -93,7 +99,8 @@ def plot_single_2d_sfs(sfs, vmin=None, vmax=None, ax=None,
     if not colorbar:
         del ax.figure.axes[-1]
 
-    ax.plot([0,sfs.shape[1]],[0, sfs.shape[0]], '-k', lw=0.2)
+    #ax.plot([0,sfs.shape[1]],[0, sfs.shape[0]], '-k', lw=0.2)
+    ax.plot([0,sfs.shape[1]],[0, sfs.shape[0]], '.', linewidth=0)
 
     if pop_ids is None:
         if sfs.pop_ids is not None:
@@ -116,6 +123,6 @@ def plot_single_2d_sfs(sfs, vmin=None, vmax=None, ax=None,
 
     ax.set_xlim(0, sfs.shape[1])
     ax.set_ylim(0, sfs.shape[0])
-    return colorbar
+    return mappable,colorbar
 
 
