@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 """
-Creates 0,1,2 genotype matrix from VCF
+Different functions to parse a  VCF.
+See argparse help.
+Todo:
+-- parallel
+-- pack into classes
 """
 #import sys, os
 import warnings
@@ -24,7 +28,7 @@ def get_AA(info_str):
     return aa
 
 
-def generic_parser(parse_fun,header_fun,vcf_fh, tsv_fh,*args,**kwa):
+def generic_parser(parse_fun,header_fun,vcf_fh, tsv_fh,no_skip_multiple_entries,*args,**kwa):
     """
     parse_fun... applied to each split data line of the vcf
     header_fun... applied to each line in the vcf header
@@ -35,7 +39,7 @@ def generic_parser(parse_fun,header_fun,vcf_fh, tsv_fh,*args,**kwa):
     p = None
     for line in vcf_fh:
         if line[0] == "#":
-            h = header_fun(line, tsv_fh, h)
+            h = header_fun(line, tsv_fh, h,**kwa)
             continue
         d = line.strip().split("\t")
         chrom = d[0]
@@ -44,9 +48,13 @@ def generic_parser(parse_fun,header_fun,vcf_fh, tsv_fh,*args,**kwa):
             assert pos >= prev_pos, "vcf positions not in "\
                                     "ascending order at: {}:{},{}".format(chrom,prev_pos,pos) 
             if pos == prev_pos:
-                warnings.warn("Warning, multiple entries for pos {}:{}.\n"
+                if no_skip_multiple_entries:
+                    warnings.warn("Warning, multiple entries for pos {}:{}.\n"
+                              "Keeping all entries.".format(chrom,pos))
+                else:
+                    warnings.warn("Warning, multiple entries for pos {}:{}.\n"
                               "Skipping all but the first.".format(chrom,pos))
-                continue
+                    continue
         p = parse_fun(d,tsv_fh, p, h, *args,**kwa)
         prev_chrom = chrom
         prev_pos = pos
@@ -136,6 +144,23 @@ def msmc_input_parse_fun(d, tsv_fhs, p, h, ind_tuples):
             p = [i+1 for i in p]
         return p
 
+#--------------
+
+
+def add_outgroup_header(line, out_vcf_fh,*args):
+    #if line[:6]=='#CHROM':
+    #    line = line.strip() + "\t" + sample_name + '\n'
+    out_vcf_fh.write(line)
+
+
+
+def add_outgroup_parse_fun(line,out_vcf_fh, *args,og_fasta=og_fasta):
+    bases = ["A",'C','T','G']
+    no_var = ['.','X']
+    og_base = og_fasta[line[0]][line[1]-1]
+    if line[4] == in novar and og_base.upper() in bases:
+        line[4] = og_base.upper()
+    out_vcf_fh.write("\t".join(line))
 
 if __name__ == "__main__":
     import argparse
@@ -143,7 +168,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Extract data from vcf file.")
     parser.add_argument("in_vcf",type = argparse.FileType('r'), default = '-', help="Input vcf filename.")
-    parser.add_argument("out_fn",type = argparse.FileType('w'), default = '-', help="Output tsv filename")
+    parser.add_argument("out_fn",type = argparse.FileType('w'), default = '-', help="Output filename")
+    parser.add_argument("--no_skip_multiple_entries",action="store_true",help="Do not skip multiple entries for the same "
+                                                                              "position can be the case for indels")
     #parser.add_argument("--ancestral_derived",action = 'store_true', help=  "0,1,2 corresponds to ancestral vs\n"
     #                                                                        "derived instead of ref vs alt.\n"
     #                                                                        "Using AA tag from VCF info.\n"
@@ -170,20 +197,36 @@ if __name__ == "__main__":
                                                         "quoted in the command line, e.g., 'id1 id2 id3' 'id2 id4') "
                                                         "produces two output files.")
 
+    parser3 = subparsers.add_parser("add_outgroup_from_fasta", help="Add outgroup difference from "
+                                                                    "outgroup fasta (in vcf ref coord) as SNPs to VCF"
+                                                                    ". The genotype itself is not added "
+                                                                    " Attention: might violate "
+                                                                    "VCF specs. "
+                                                                    "Read function docu for "
+                                                                    "more info.")
+
+    parser3.add_argument("--in_fasta", default = '-',
+                                                help="Genotypes to be added into VCF.")
+
+    #parser3.add_argument("--sample_name",help="Name of the sample to be added.")
+
     args = parser.parse_args()
     #for k,v in vars(args).iteritems():
     #    print k,v,
     if args.mode == "to012":
         generic_parser(vcf_to_012_parse_fun,vcf_to_012_header,
-                                        args.in_vcf, args.out_fn)
+                                        args.in_vcf, args.out_fn,no_skip_multiple_entries)
     elif args.mode == "ref_alt_anc":
         generic_parser(ref_alt_anc_parse_fun, ref_alt_anc_header,
-                                           args.in_vcf, args.out_fn)
+                                           args.in_vcf, args.out_fn,no_skip_multiple_entries)
     elif args.mode == "msmc":
         out_fns = [args.out_fn] if args.add_out_fns is None else [args.out_fn]+args.add_out_fns
         assert len(out_fns) == len(args.ind_tuples), "There are {} out files but {} tuples.".format(len(out_fns),len(args.ind_tuples))
-        generic_parser(msmc_input_parse_fun, msmc_header, args.in_vcf, out_fns,
+        generic_parser(msmc_input_parse_fun, msmc_header, args.in_vcf, out_fns,no_skip_multiple_entries,
                                                 ind_tuples = [it.split() for it in args.ind_tuples])
-
+    elif args.mode == "add_outgroup_from_fasta":
+        import pyfasta
+        og_fasta = pyfasta.Fasta(args.in_fasta)
+        
     else:
         raise UserException("Unknown mode.")

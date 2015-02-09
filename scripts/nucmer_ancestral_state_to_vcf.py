@@ -4,9 +4,10 @@ import os, sys, math
 import vcf
 import pyfasta
 
+bases = "ACGTN"
+comp = "TGCAN"
+
 def complement(base):
-    bases = "ACGTN"
-    comp = "TGCAN"
     return comp[bases.index(base)]
 
 def print_align(str0,str1,line_length):
