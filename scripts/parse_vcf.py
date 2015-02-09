@@ -96,7 +96,7 @@ def get_alleles(allele_dic,gt_str):
     phased = (True if gt_str[1]=="|" else False)
     return (allele0, allele1, phased)
 
-def msmc_input_parse_fun(d, tsv_fhs, p, h, ind_tuples):
+def msmc_input_parse_fun(d, tsv_fhs, p, h, ind_tuples,haplotypes):
     """
     *attention, input must be a VCF that includes all sites,
      segregating and non-segregating, filtered and non-filtered
@@ -116,17 +116,24 @@ def msmc_input_parse_fun(d, tsv_fhs, p, h, ind_tuples):
     #    return p
     #else:
     #    p += 1
-    if d[4] in "ACGT": #if SNP
-        if d[6] in ["PASS","","."]: #check whether not filtered
+    if d[4] in ['A','C','G','T']: #if SNP
+        if d[6] in ["PASS","","."] and len(d[3])==1: #check whether not filtered or deletion
             allele_dic = {"0":d[3],"1":d[4],".":"?"}
             for j,(tsv_fh,ids) in enumerate(zip(tsv_fhs,ind_tuples)):
                 genotypes = [get_alleles(allele_dic,d[h.index(id)]) for id in ids]
+                phases = [g[2] for g in genotypes]
+                if haplotypes==0:
+                    genotype_strs = [g[0] for g in genotypes]
+                elif haplotypes==1:
+                    genotype_strs = [g[1] for g in genotypes]
+                elif haplotypes==2:
+                    genotype_strs = [g[0]+g[1] for g in genotypes]
                 gts = []
-                for gt in genotypes:
-                   if gt[2] or (gt[0]=='?' and gt[1]=='?') or (gt[0] == gt[1]):
-                        gts.append([gt[0]+gt[1]])
+                for gt, phase in zip(genotype_strs,phases):
+                   if phase or ('?' in gt) or (gt == gt[0]*len(gt)):
+                        gts.append([gt])
                    else:
-                        gts.append([gt[0]+gt[1],gt[1]+gt[0]])
+                        gts.append([gt,gt[::-1]])
                 gt_str = ",".join(["".join(i) for i in itertools.product(*gts)])
                 if "?" in gt_str: #don't print site with missing gt
                     pass
@@ -196,6 +203,7 @@ if __name__ == "__main__":
                                                         "Each n-tuple of ids for the same file should be "
                                                         "quoted in the command line, e.g., 'id1 id2 id3' 'id2 id4') "
                                                         "produces two output files.")
+    parser2.add_argument("--haplotypes",type=int,default=2,help="Which haplotypes to use:0..first,1..second,2..both")
 
     parser3 = subparsers.add_parser("add_outgroup_from_fasta", help="Add outgroup difference from "
                                                                     "outgroup fasta (in vcf ref coord) as SNPs to VCF"
@@ -223,10 +231,10 @@ if __name__ == "__main__":
         out_fns = [args.out_fn] if args.add_out_fns is None else [args.out_fn]+args.add_out_fns
         assert len(out_fns) == len(args.ind_tuples), "There are {} out files but {} tuples.".format(len(out_fns),len(args.ind_tuples))
         generic_parser(msmc_input_parse_fun, msmc_header, args.in_vcf, out_fns,no_skip_multiple_entries,
-                                                ind_tuples = [it.split() for it in args.ind_tuples])
+                                                ind_tuples = [it.split() for it in args.ind_tuples],
+                                                                               haplotypes=args.haplotypes)
     elif args.mode == "add_outgroup_from_fasta":
         import pyfasta
         og_fasta = pyfasta.Fasta(args.in_fasta)
-        
     else:
         raise UserException("Unknown mode.")
