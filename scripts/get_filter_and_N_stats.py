@@ -7,7 +7,7 @@ import numpy as np
 #define parse function
 def filtered_missing_stats(reader):
     snp = ["A","G","C","T"]
-    novar = [None,"X"]
+    novar = [None,"X",'.']
     sites_dic = {"total":0,"pass_nosnp":0,"pass_snp":0,"filter_nosnp":0,"filter_snp":0}
     prev_pos = 0
     N_df = pd.DataFrame(0,columns=sites_dic.keys(),index=reader.samples)
@@ -48,7 +48,7 @@ def filtered_missing_stats(reader):
 def reduce_stats(stats_ls):
     sites_dic = {k:sum([d[0][k] for d in stats_ls]) for k in stats_ls[0][0].keys()}
     N_df = sum([j[1] for j in stats_ls])
-    Nxy = sum([j[2] for j in stats_ls])
+    nNxy = sum([j[2] for j in stats_ls])
     #correlation
     corr = (Nxy-1./sites_dic["total"]*np.outer(N_df["total"],N_df["total"]))/\
             np.sqrt(np.outer(N_df["total"]*(1-1./sites_dic["total"]*N_df["total"]),N_df["total"]*(1-1./sites_dic["total"]*N_df["total"])))
