@@ -6,27 +6,29 @@ Todo:
 -- parallel
 -- pack into classes
 """
-import sys
+import sys, os
 import logging
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
-
+eu = os.path.expanduser
 
 analyses = {}
-def add_analysis(name,funs,req_params_within_python=None,
-                    req_params_command_line=None,
+def add_analysis(name,funs,info='',always_req_params=None,
+                    command_line_req_params=None,
                     opt_params=None):
     """
     Add analysis to dict of analyses.
+    Input:
+        funs: dict of {name:function} with
     """
     entry = {'funs':funs,
-               'req_params_command_line':\
-                req_params_command_line if req_params_command_line is not None else {}}
-               'req_params_within_python':\
-                req_params_within_python if req_params_within_python is not None else {}}
-               'opt_params':\
-                opt_params if opt_params is not None else {}}
-    analyses.update(name:entry)
+             'info':info,
+               'command_line_req_params':\
+                 command_line_req_params if command_line_req_params is not None else {},
+               'always_req_params':\
+                 always_req_params if always_req_params is not None else {},
+               'opt_params': opt_params if opt_params is not None else {}}
+    analyses.update({name:entry})
 
 
 
@@ -39,9 +41,10 @@ def check_params(arg_dic,req_param_dic):
         if k not in arg_dic:
             raise TypeError('Required parameter {} missing from arg_dic.'.format(k))
 
-def get_parser(analysis,arg_dic):
-    check_params(arg_dic,analyses['analysis']['req_params_within_python'])
-    return VCFParser(**analyses['analysis']['funs'],arg_dic=arg_dic)
+def get_parser(vcf_fh,analysis_name,arg_dic,skip_multiple_entries=None):
+    check_params(arg_dic,analyses[analysis_name]['always_req_params'])
+    return VCFParser(vcf_fh,arg_dic=arg_dic,skip_multiple_entries=skip_multiple_entries,
+                                                **analyses[analysis_name]['funs'])
 
 
 
@@ -102,23 +105,14 @@ class VCFParser(object):
             header_fun = lambda *x,**y: None
         self.header_fun = header_fun
         if setup_fun is None:
-            setup_fun = lambda *x:x
+            setup_fun = lambda *x,**y: None
         self.setup_fun = setup_fun
         if cleanup_fun is None:
             cleanup_fun = lambda *x,**y: None
         self.cleanup_fun = cleanup_fun
         if arg_dic is None:
             arg_dic = {}
-        self.parse_arg_dic = parse_arg_dic
-#        if parse_arg_dic is None:
-#            parse_arg_dic = {}
-#        self.parse_arg_dic = parse_arg_dic
-#        if header_arg_dic is None:
-#            header_arg_dic = {}
-#        self.header_arg_dic = header_arg_dic
-#        if cleanup_arg_dic is None:
-#            cleanup_arg_dic = {}
-#        self.cleanup_arg_dic = cleanup_arg_dic
+        self.arg_dic = arg_dic
 
         self.skip_multiple_entries = skip_multiple_entries
 
@@ -132,17 +126,22 @@ class VCFParser(object):
         """
         prev_chrom = None
         prev_pos = -1
-        logging.info("Starting parsing.")
+        logging.info("Starting parsing:.")
         multiple_count = 0
+        before_header = True
+        before_body = True
         for i,line in enumerate(self.vcf_fh):
             #logging.debug(line)
             if line[0] == "#":
-                logging.info("Parsing header.")
-                header_line_nr = i
+                if before_header:
+                    logging.info("Parsing header.")
+                    before_header = False
                 self.header_fun(line,self.arg_dic)
                 continue
             else:
-                logging.info("Parsing main body.")
+                if before_body:
+                    logging.info("Parsing main body.")
+                    before_body = False
             #logging.debug("Parsing main line {}".format(i-header_line_nr))
             d = line.strip().split("\t")
             chrom = d[0]
@@ -312,7 +311,9 @@ def add_outgroup_parse_fun(line,out_vcf_fh, *args,**kwa):
 
 
 #-----------------------------
-
+info = \
+    """Count occurences of all combinations
+       of filters in the filter column."""
 
 def get_filter_stats_setup_fun(arg_dic):
     try:
@@ -328,14 +329,14 @@ def get_filter_stats_parse_fun(line,arg_dic):
     add_to_countdic(arg_dic['count_dic'],'n_sites')
     add_to_countdic(arg_dic['count_dic'],filters)
 
-def get_filter_stats_cleanup_fun(arg_dic,out_fh=None):
+def get_filter_stats_cleanup_fun(arg_dic):
     import pandas as pd
     filter_info = pd.Series(arg_dic['count_dic'].values(),
                                 index=arg_dic['count_dic'].keys())
     filter_info.sort(inplace=True,ascending=False)
-    if out_fh is not None:
-        filter_info.to_csv(out_fh,sep='\t')
-    else:
+    try:
+        filter_info.to_csv(arg_dic['out_fh'],sep='\t')
+    except KeyError:
         return filter_info
     #json.dump(countdic,open(out_fn,'w'))
 
@@ -343,9 +344,52 @@ add_analysis('get_filter_stats',
              {'setup_fun':get_filter_stats_setup_fun,
               'parse_fun':get_filter_stats_parse_fun,
                'cleanup_fun':get_filter_stats_cleanup_fun},
-                    req_params_command_line={'out_fn':"Filename to write to"})
+                info,
+                    command_line_req_params={'out_fn':"Filename to write to."})
+
+#--------add_ancestral_from_fasta-----------
+info = \
+    """Add ancestral state from fasta to vcf.
+        E.g.,
+       Macaque state is taken from vervet-macaque
+       alignment and added in the info column with
+       tag AA.
+    """
+
+def add_ancestral_from_fasta_setup_fun(arg_dic):
+    from pyfasta import Fasta
+    arg_dic["out_vcf_fh"] = open(eu(arg_dic["out_vcf"]),'w')
+    arg_dic["fasta"] = Fasta(eu(arg_dic["ancestral_fasta"]))
+    arg_dic['info_parsed'] = False
+
+def add_ancestral_from_fasta_header_fun(line,arg_dic):
+    if line[:7] == '##INFO=':
+         arg_dic['info_parsed'] = True
+    elif arg_dic['info_parsed']:
+        arg_dic["out_vcf_fh"].write(\
+                                '##INFO=<ID=AA,Number=1,Type=Character'
+                                ',Description="Ancestral allele as'
+                                ' derived from {}">\n'.format(arg_dic['ancestral_source']))
+        arg_dic['info_parsed'] = False
+    arg_dic["out_vcf_fh"].write(line)
+
+def add_ancestral_from_fasta_parse_fun(line,arg_dic):
+    aa = arg_dic['fasta'][line[0]][int(line[1])-1]
+    if aa not in ['N','n']:
+        line[7] = line[7] + ';AA=' + aa
+    arg_dic["out_vcf_fh"].write("\t".join(line)+'\n')
 
 
+add_analysis('add_ancestral_fasta',
+             {'setup_fun':add_ancestral_from_fasta_setup_fun,
+              'header_fun':add_ancestral_from_fasta_header_fun,
+              'parse_fun':add_ancestral_from_fasta_parse_fun},
+                info,
+                always_req_params={'ancestral_source':\
+                                        "Name of source of ancestral allele info.",
+                                   'ancestral_fasta':\
+                                        'Filepath of fasta with ancestral state.',
+                                   'out_vcf':"Filepath to write output vcf to."})
 
 #------------------------
 
@@ -395,15 +439,13 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Parse a Variant Call Format (VCF) file.")
     parser.add_argument("in_vcf",type = argparse.FileType('r'), default = '-', help="Input vcf filepath.")
-    parser.add_argument("--analysis_type","-T",help="Name of type of analysis,
-                                                      that defines the functions to use. 
-                                                        Run --show_analyses to see available tools.")
+    parser.add_argument("--analysis_type","-T",help="Name of type of analysis, "
+                                                      "that defines the functions to use. "
+                                                        "Run --show_analyses to see available tools.")
     
     parser.add_argument("--show_analyses",action='store_true',help="List available analyses and exit.")
     parser.add_argument("--analysis_info",help="Get info for specified analysis and exit.")
     parser.add_argument("--arg_dic",help='key=value pairs to pass as dict to functions. E.g., "foo=bar;test=hallo du"')
-    #parser.add_argument("--header_kwa",help='key=value pairs to pass to header fun. E.g., "foo=bar;test=hallo du"')
-    #parser.add_argument("--cleanup_kwa",help='key=value pairs to pass to cleanup fun. E.g., "foo=bar;test=hallo du"')
     parser.add_argument("--no_skip_multiple_entries",action='store_true',
                          help='Do not skip all but the first entry for the same site in the VCF.')
 
@@ -414,42 +456,23 @@ if __name__ == "__main__":
         for k in analyses:
             print k+':', analyses['k']['info']
     elif args.analysis_info is not None:
-        print analyses['analysis_info']
+        print analyses[args.analysis_info]
+    elif args.analysis_type is not None:
+        assert args.analysis_type in analyses, "Analysis {} does not exist."\
+                                                "Possible analyses are {}.".format(args.analysis_type,
+                                                                                   analyses.keys())
+        if args.arg_dic is not None:
+            arg_dic = {k:v for (k,v) in [t.split('=') for t in args.arg_dic.split(';')]}
+        else:
+            arg_dic = {}
+        check_params(arg_dic,analyses[args.analysis_type]['command_line_req_params'])
+        parser = get_parser(args.in_vcf,args.analysis_type,arg_dic,not args.no_skip_multiple_entries)
+        parser.run()
+
     else:
-        
+        logging.warning("No analysis specified. Run with flag -h for options.")
 
 
-    if args.parse_fun is not None:
-        pf = eval(args.parse_fun)
-    else:
-        pf = None
-    if args.header_fun is not None:
-        hf = eval(args.header_fun)
-    else:
-        hf = None
-    if args.setup_fun is not None:
-        sf = eval(args.setup_fun)
-    else:
-        sf = None
-    if args.cleanup_fun is not None:
-        cf = eval(args.cleanup_fun)
-    else:
-        cf = None
-    if args.arg_dic is not None:
-        arg_dic = {k:v for (k,v) in [t.split('=') for t in args.arg_dic.split(';')]}
-    else:
-        arg_dic = None
-#    if args.header_kwa is not None:
-#        header_arg_dic = {k:v for (k,v) in [t.split('=') for t in args.header_kwa.split(';')]}
-#    else:
-#        header_arg_dic = None
-#    if args.cleanup_kwa is not None:
-#        cleanup_arg_dic = {k:v for (k,v) in [t.split('=') for t in args.cleanup_kwa.split(';')]}
-#    else:
-#        cleanup_arg_dic = None
 
-    parser = VCFParser(args.in_vcf,pf,hf,cf,sf,
-            arg_dic,args.no_skip_multiple_entries)
-    parser.run()
 
     
