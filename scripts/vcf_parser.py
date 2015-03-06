@@ -437,8 +437,9 @@ add_analysis('add_ancestral_fasta',
 if __name__ == "__main__":
     #import gzip
     import argparse
+    import select
     parser = argparse.ArgumentParser(description="Parse a Variant Call Format (VCF) file.")
-    parser.add_argument("in_vcf",type = argparse.FileType('r'), default = '-', help="Input vcf filepath.")
+    parser.add_argument("--variant",'-V',type = argparse.FileType('r'), default = '-', help="Input vcf filepath.")
     parser.add_argument("--analysis_type","-T",help="Name of type of analysis, "
                                                       "that defines the functions to use. "
                                                         "Run --show_analyses to see available tools.")
@@ -461,12 +462,13 @@ if __name__ == "__main__":
         assert args.analysis_type in analyses, "Analysis {} does not exist."\
                                                 "Possible analyses are {}.".format(args.analysis_type,
                                                                                    analyses.keys())
+        assert select.select([args.variant,],[],[],0.0)[0], "Input vcf has no data."
         if args.arg_dic is not None:
             arg_dic = {k:v for (k,v) in [t.split('=') for t in args.arg_dic.split(';')]}
         else:
             arg_dic = {}
         check_params(arg_dic,analyses[args.analysis_type]['command_line_req_params'])
-        parser = get_parser(args.in_vcf,args.analysis_type,arg_dic,not args.no_skip_multiple_entries)
+        parser = get_parser(args.variant,args.analysis_type,arg_dic,not args.no_skip_multiple_entries)
         parser.run()
 
     else:
