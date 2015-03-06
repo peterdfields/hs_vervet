@@ -12,6 +12,38 @@ logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
 
 
+analyses = {}
+def add_analysis(name,funs,req_params_within_python=None,
+                    req_params_command_line=None,
+                    opt_params=None):
+    """
+    Add analysis to dict of analyses.
+    """
+    entry = {'funs':funs,
+               'req_params_command_line':\
+                req_params_command_line if req_params_command_line is not None else {}}
+               'req_params_within_python':\
+                req_params_within_python if req_params_within_python is not None else {}}
+               'opt_params':\
+                opt_params if opt_params is not None else {}}
+    analyses.update(name:entry)
+
+
+
+def check_params(arg_dic,req_param_dic):
+    """
+    Check whether params noted in req_param_dic are 
+    present in arg dic
+    """
+    for k in req_param_dic:
+        if k not in arg_dic:
+            raise TypeError('Required parameter {} missing from arg_dic.'.format(k))
+
+def get_parser(analysis,arg_dic):
+    check_params(arg_dic,analyses['analysis']['req_params_within_python'])
+    return VCFParser(**analyses['analysis']['funs'],arg_dic=arg_dic)
+
+
 
 #--------support functions------------
 def get_012(gt_str):
@@ -31,13 +63,37 @@ def get_AA(info_str):
     aa = info_str.split("AA=")[1][0]    
     return aa
 
+#---------main object-------------------
+
 class VCFParser(object):
     """
-    Parse a VCF file.
+    Generic parser for VCF file.
+    Input:
+    vcf_fh ... file handle to input vcf file
+    parse_fun ... Function applied to each line of the vcf body.
+                  Takes as input a split line (list) and two
+                    dictionaries with additional parameters and variables,
+                    e.g, to count something.
+                    The first dictionary is its 
+    header_fun ... Function applied to each line of the vcf header.
+                   Takes as input a line (string) abd a dictionary
+                    with additional parameters and variables.
+    setup_fun ... Function applied to all input dictionaries to modify 
+                   them if needed, e.g., to initialise the variables used
+                    by parse fun.
+    parse_fun ... Function applied to each line of the vcf body.
+
+    Examples:
+    
+    
+
     """
-    def __init__(self,vcf_fh, parse_fun=None, header_fun=None, cleanup_fun=None,
-                    parse_arg_dic=None, header_arg_dic=None, cleanup_arg_dic=None,
-                                                    skip_multiple_entries=True,**kwa):
+    def __init__(self,vcf_fh, parse_fun=None, header_fun=None,
+                               setup_fun=None, cleanup_fun=None,
+                                arg_dic=None,
+                        #parse_arg_dic=None, header_arg_dic=None,
+                        #setup_arg_dic=None, cleanup_arg_dic=None,
+                                    skip_multiple_entries=True,**kwa):
         self.vcf_fh = vcf_fh
         if parse_fun is None:
             parse_fun = lambda *x,**y: None
@@ -45,43 +101,48 @@ class VCFParser(object):
         if header_fun is None:
             header_fun = lambda *x,**y: None
         self.header_fun = header_fun
+        if setup_fun is None:
+            setup_fun = lambda *x:x
+        self.setup_fun = setup_fun
         if cleanup_fun is None:
             cleanup_fun = lambda *x,**y: None
         self.cleanup_fun = cleanup_fun
-        if parse_arg_dic is None:
-            parse_arg_dic = {}
+        if arg_dic is None:
+            arg_dic = {}
         self.parse_arg_dic = parse_arg_dic
-        if header_arg_dic is None:
-            header_arg_dic = {}
-        self.header_arg_dic = header_arg_dic
-        if cleanup_arg_dic is None:
-            cleanup_arg_dic = {}
-        self.cleanup_arg_dic = cleanup_arg_dic
+#        if parse_arg_dic is None:
+#            parse_arg_dic = {}
+#        self.parse_arg_dic = parse_arg_dic
+#        if header_arg_dic is None:
+#            header_arg_dic = {}
+#        self.header_arg_dic = header_arg_dic
+#        if cleanup_arg_dic is None:
+#            cleanup_arg_dic = {}
+#        self.cleanup_arg_dic = cleanup_arg_dic
 
         self.skip_multiple_entries = skip_multiple_entries
 
+    def setup(self):
+        logging.info("Starting setup.")
+        self.setup_fun(self.arg_dic)
+        #self.arg_dic = arg_dic
+
     def parse(self):
         """
-        header_out and parser_out
-        can be used to store, append and reuse information.
-        If information from previous lines should be propagated,
-        make sure that header_out and parser_out are mutable types
-        that are changed by side-effects
-        such as dicts or lists.
         """
-        header_out = {}
-        parser_out = {}
         prev_chrom = None
         prev_pos = -1
         logging.info("Starting parsing.")
-        header_line_nr = 0
+        multiple_count = 0
         for i,line in enumerate(self.vcf_fh):
             #logging.debug(line)
             if line[0] == "#":
+                logging.info("Parsing header.")
                 header_line_nr = i
-                #logging.debug("Parsing header line {}".format(i))
-                self.header_fun(line,header_out=header_out,**self.header_arg_dic)
+                self.header_fun(line,self.arg_dic)
                 continue
+            else:
+                logging.info("Parsing main body.")
             #logging.debug("Parsing main line {}".format(i-header_line_nr))
             d = line.strip().split("\t")
             chrom = d[0]
@@ -90,28 +151,51 @@ class VCFParser(object):
                 assert pos >= prev_pos, "vcf positions not in "\
                                         "ascending order at: {}:{},{}".format(chrom,prev_pos,pos)
                 if pos == prev_pos:
-                    if not skip_multiple_entries:
-                        logging.warning("Multiple entries for pos {}:{}.\n"
-                                  "Keeping all entries.".format(chrom,pos))
+                    multiple_count += 1
+                    if mutiple_count > 100:
+                        logging.warning("Omitting further multiple entry warnings.")
                     else:
-                        logging.warning("Warning, multiple entries for pos {}:{}.\n"
+                        if not skip_multiple_entries:
+                            logging.warning("Multiple entries for pos {}:{}.\n"
+                                      "Keeping all entries.".format(chrom,pos))
+                        else:
+                            logging.warning("Warning, multiple entries for pos {}:{}.\n"
                                   "Skipping all but the first.".format(chrom,pos))
-                        continue
-            self.parse_fun(d,header_out=header_out,parser_out=parser_out,**self.parse_arg_dic)
+                            continue
+            self.parse_fun(d,self.arg_dic)
             prev_chrom = chrom
             prev_pos = pos
             #if i>10000:
             #    break
-        self.parser_out = parser_out
 
     def cleanup(self):
         """
         """
         logging.info("Starting cleanup.")
-        self.cleanup_fun(self.parser_out,**self.cleanup_arg_dic)
+        self.result = self.cleanup_fun(self.arg_dic)
 
 
-#--------parsing functions-------------
+    def run(self):
+        self.setup()
+        self.parse()
+        self.cleanup()
+        #return self.result
+
+
+
+#------support functions----------------
+
+
+def add_to_countdic(dic,key):
+    try:
+        dic[key] += 1
+    except KeyError:
+        dic[key] = 1
+
+#-----------------------------------------
+#--------parsing functions---------------
+#-----------------------------------------
+
 
 def vcf_to_012_header(line, tsv_fh,*args):
     if line[1:6] == "CHROM":
@@ -230,58 +314,109 @@ def add_outgroup_parse_fun(line,out_vcf_fh, *args,**kwa):
 #-----------------------------
 
 
-def get_filter_stats_parse_fun(line,parser_out,**kwa):
-    def add_to_countdic(dic,key):
-        try:
-            dic[key] += 1
-        except KeyError:
-            dic[key] = 1
+def get_filter_stats_setup_fun(arg_dic):
+    try:
+        arg_dic['out_fh'] = open(arg_dic['out_fn'],'w')
+    except KeyError:
+        logging.warning('No out filepath specified. Returning output directly.')
+    arg_dic['count_dic'] = {}
+
+def get_filter_stats_parse_fun(line,arg_dic):
     filters = line[6].split(';')
     filters.sort()
     filters = tuple(filters)
-    add_to_countdic(parser_out,'n_sites')
-    add_to_countdic(parser_out,filters)
+    add_to_countdic(arg_dic['count_dic'],'n_sites')
+    add_to_countdic(arg_dic['count_dic'],filters)
 
-def get_filter_stats_cleanup_fun(countdic,out_fn=sys.stdout):
+def get_filter_stats_cleanup_fun(arg_dic,out_fh=None):
     import pandas as pd
-    filter_info = pd.Series(countdic.values(),index=countdic.keys())
+    filter_info = pd.Series(arg_dic['count_dic'].values(),
+                                index=arg_dic['count_dic'].keys())
     filter_info.sort(inplace=True,ascending=False)
-    filter_info.to_csv(out_fn,sep='\t')
+    if out_fh is not None:
+        filter_info.to_csv(out_fh,sep='\t')
+    else:
+        return filter_info
     #json.dump(countdic,open(out_fn,'w'))
+
+add_analysis('get_filter_stats',
+             {'setup_fun':get_filter_stats_setup_fun,
+              'parse_fun':get_filter_stats_parse_fun,
+               'cleanup_fun':get_filter_stats_cleanup_fun},
+                    req_params_command_line={'out_fn':"Filename to write to"})
+
+
+
+#------------------------
+
+#def filter_missing_stats_parse_fun(line,parser_out,):
+#    
+#    snp = ["A","G","C","T"]
+#    novar = [None,"X",'.']
+#    sites_dic = {"total":0,"pass_nosnp":0,"pass_snp":0,"filter_nosnp":0,"filter_snp":0}
+#    N_df = pd.DataFrame(0,columns=sites_dic.keys(),index=reader.samples)
+#    Nxy = np.zeros((len(reader.samples),len(reader.samples)))
+#
+#    parser_out['sites_dic']["total"] += 1
+#    ns = np.array([1 if s.data.GT is None else 0 for s in rec.samples]) #vector of Ns
+#    parser_out['N_df']["total"] +=  ns
+#
+#        Nxy += np.outer(ns,ns)
+#        try:
+#            alt = rec.ALT[0].sequence
+#        except AttributeError:
+#            alt = rec.ALT[0].
+#        is_variant = not alt in novar
+#        if is_variant:
+#            if not rec.FILTER:
+#                category = "pass_snp"
+#
+#            else:
+#                category = "filter_snp"
+#        else:
+#            if not rec.FILTER or (len(rec.FILTER)==1 and ("LowQual" in rec.FILTER) and rec.QUAL>5):
+#                category = "pass_nosnp"
+#            else:
+#                category = "filter_nosnp"
+#        sites_dic[category] += 1
+#        N_df[category] += ns
+#        prev_pos = rec.POS
+#....
+#    Nxy = pd.DataFrame(Nxy,index=reader.samples,columns=reader.samples)
+#    return (sites_dic, N_df, Nxy)
 
 
 #---MAIN----FUNCTION-------------
 
 
-def run(vcf_fh, parse_fun=None, header_fun=None, cleanup_fun=None,
-        parse_arg_dic=None, header_arg_dic=None, cleanup_arg_dic=None,
-                                        no_skip_multiple_entries=False):
-
-
-    parser = VCFParser(vcf_fh,parse_fun,header_fun,cleanup_fun,
-                        parse_arg_dic,header_arg_dic,cleanup_arg_dic,
-                    skip_multiple_entries=not no_skip_multiple_entries)
-    parser.parse()
-    parser.cleanup()
-
-    return parser.parser_out
 
 if __name__ == "__main__":
     #import gzip
     import argparse
     parser = argparse.ArgumentParser(description="Parse a Variant Call Format (VCF) file.")
     parser.add_argument("in_vcf",type = argparse.FileType('r'), default = '-', help="Input vcf filepath.")
-    parser.add_argument("--parse_fun",help="Name of function to be used to parse the vcf body.")
-    parser.add_argument("--header_fun",help="Name of function to be used to parse the vcf header.")
-    parser.add_argument("--cleanup_fun",help="Name of function to be used to handle the parser output.")
-    parser.add_argument("--parse_kwa",help='key=value pairs to pass to parse fun. E.g., "foo=bar;test=hallo du"')
-    parser.add_argument("--header_kwa",help='key=value pairs to pass to header fun. E.g., "foo=bar;test=hallo du"')
-    parser.add_argument("--cleanup_kwa",help='key=value pairs to pass to cleanup fun. E.g., "foo=bar;test=hallo du"')
+    parser.add_argument("--analysis_type","-T",help="Name of type of analysis,
+                                                      that defines the functions to use. 
+                                                        Run --show_analyses to see available tools.")
+    
+    parser.add_argument("--show_analyses",action='store_true',help="List available analyses and exit.")
+    parser.add_argument("--analysis_info",help="Get info for specified analysis and exit.")
+    parser.add_argument("--arg_dic",help='key=value pairs to pass as dict to functions. E.g., "foo=bar;test=hallo du"')
+    #parser.add_argument("--header_kwa",help='key=value pairs to pass to header fun. E.g., "foo=bar;test=hallo du"')
+    #parser.add_argument("--cleanup_kwa",help='key=value pairs to pass to cleanup fun. E.g., "foo=bar;test=hallo du"')
     parser.add_argument("--no_skip_multiple_entries",action='store_true',
                          help='Do not skip all but the first entry for the same site in the VCF.')
 
 
     args = parser.parse_args()
+
+    if args.show_analyses:
+        for k in analyses:
+            print k+':', analyses['k']['info']
+    elif args.analysis_info is not None:
+        print analyses['analysis_info']
+    else:
+        
 
 
     if args.parse_fun is not None:
@@ -292,23 +427,29 @@ if __name__ == "__main__":
         hf = eval(args.header_fun)
     else:
         hf = None
+    if args.setup_fun is not None:
+        sf = eval(args.setup_fun)
+    else:
+        sf = None
     if args.cleanup_fun is not None:
         cf = eval(args.cleanup_fun)
     else:
         cf = None
-    if args.parse_kwa is not None:
-        parse_arg_dic = {k:v for (k,v) in [t.split('=') for t in args.parse_kwa.split(';')]}
+    if args.arg_dic is not None:
+        arg_dic = {k:v for (k,v) in [t.split('=') for t in args.arg_dic.split(';')]}
     else:
-        parse_arg_dic = None
-    if args.header_kwa is not None:
-        header_arg_dic = {k:v for (k,v) in [t.split('=') for t in args.header_kwa.split(';')]}
-    else:
-        header_arg_dic = None
-    if args.cleanup_kwa is not None:
-        cleanup_arg_dic = {k:v for (k,v) in [t.split('=') for t in args.cleanup_kwa.split(';')]}
-    else:
-        cleanup_arg_dic = None
+        arg_dic = None
+#    if args.header_kwa is not None:
+#        header_arg_dic = {k:v for (k,v) in [t.split('=') for t in args.header_kwa.split(';')]}
+#    else:
+#        header_arg_dic = None
+#    if args.cleanup_kwa is not None:
+#        cleanup_arg_dic = {k:v for (k,v) in [t.split('=') for t in args.cleanup_kwa.split(';')]}
+#    else:
+#        cleanup_arg_dic = None
 
-    run(args.in_vcf,pf,hf,cf,
-          parse_arg_dic,header_arg_dic,cleanup_arg_dic,args.no_skip_multiple_entries)
+    parser = VCFParser(args.in_vcf,pf,hf,cf,sf,
+            arg_dic,args.no_skip_multiple_entries)
+    parser.run()
+
     

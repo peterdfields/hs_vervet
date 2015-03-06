@@ -64,7 +64,7 @@ def reduce_stats(stats_ls):
 if __name__ == "__main__":
     import argparse
     import json
-    from hs_vervet.tools import bioparallel
+    from hs_vervet.tools import vcf_parser
 
     parser = argparse.ArgumentParser(description="Produce statistics on filtered sites "
                                                  "and missing genotypes in a VCF.\n"
@@ -91,7 +91,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    parser =  bioparallel.VCFParser(args.in_vcf,filtered_missing_stats,
+    parser =  vcf_parser.VCFParser(args.in_vcf,filtered_missing_stats,
                                     chromosomes=args.chrom,
                                     chrom_len=args.chrom_len,
                                     mode="count",
