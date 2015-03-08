@@ -4,14 +4,18 @@ Different functions to parse a  VCF.
 See argparse help.
 Todo:
 -- parallel
--- pack into classes
 """
-import sys, os
+import sys, os, json
 import logging
+import numpy as np
+import pandas as pd
 logger = logging.getLogger()
-logging.basicConfig(format='%(asctime)s %(message)s')
+logging.basicConfig(format='%(levelname)-8s %(asctime)s  %(message)s')
 logger.setLevel(logging.DEBUG)
 eu = os.path.expanduser
+
+nucleotides = ['A','C','T','G']
+no_var = ['N','.','X']
 
 analyses = {}
 def add_analysis(name,funs,info='',always_req_params=None,
@@ -49,23 +53,6 @@ def get_parser(vcf_fh,analysis_name,arg_dic,skip_multiple_entries=None):
 
 
 
-#--------support functions------------
-def get_012(gt_str):
-    if gt_str[:3] in ["0/0","0|0"]:
-        return "0"
-    elif gt_str[:3] in ["1/1","1|1"]:
-        return "2"
-    elif gt_str[:3] in ["0/1","0|1","1|0"]:
-        return "1"
-    elif gt_str[:3] == "./.":
-        return "N"
-    else:
-        raise ValueError("Unsupported genotype " + gt_str)
-
-
-def get_AA(info_str):
-    aa = info_str.split("AA=")[1][0]    
-    return aa
 
 #---------main object-------------------
 
@@ -99,17 +86,9 @@ class VCFParser(object):
                         #setup_arg_dic=None, cleanup_arg_dic=None,
                                     skip_multiple_entries=True,**kwa):
         self.vcf_fh = vcf_fh
-        if parse_fun is None:
-            parse_fun = lambda *x,**y: None
         self.parse_fun = parse_fun
-        if header_fun is None:
-            header_fun = lambda *x,**y: None
         self.header_fun = header_fun
-        if setup_fun is None:
-            setup_fun = lambda *x,**y: None
         self.setup_fun = setup_fun
-        if cleanup_fun is None:
-            cleanup_fun = lambda *x,**y: None
         self.cleanup_fun = cleanup_fun
         if arg_dic is None:
             arg_dic = {}
@@ -127,28 +106,26 @@ class VCFParser(object):
         #self.arg_dic = arg_dic
 
 
+    def parse_header(self):
+        logging.info("Parsing header.")
+        for line in self.vcf_fh:
+            if line[0] == '#':
+                if self.header_fun is not None:
+                    self.header_fun(line,self.arg_dic)
+            else:
+                break
+
     def parse(self):
         """
         """
+        logging.info("Parsing vcf body.")
         prev_chrom = None
         prev_pos = -1
-        logging.info("Starting parsing:.")
         multiple_count = 0
-        before_header = True
-        before_body = True
-        for i,line in enumerate(self.vcf_fh):
-            #logging.debug(line)
+        for line in self.vcf_fh:
             if line[0] == "#":
-                if before_header:
-                    logging.info("Parsing header.")
-                    before_header = False
-                self.header_fun(line,self.arg_dic)
+                logging.warning("Skipping comment line in vcf: {}".format(line))
                 continue
-            else:
-                if before_body:
-                    logging.info("Parsing main body.")
-                    before_body = False
-            #logging.debug("Parsing main line {}".format(i-header_line_nr))
             d = line.strip().split("\t")
             chrom = d[0]
             pos = int(d[1])
@@ -181,21 +158,56 @@ class VCFParser(object):
 
 
     def run(self):
-        self.setup()
-        self.parse()
-        self.cleanup()
-        #return self.result
+        if self.setup_fun is not None:
+            self.setup()
+        self.parse_header()
+        if self.parse_fun is not None:
+            self.parse()
+        if self.cleanup_fun is not None:
+            self.cleanup()
+        else:
+            self.result = None
+        logging.info("Run finished.")
 
 
 
 #------support functions----------------
 
+#=====support setup======
+
+def try_add_out_fh(arg_dic,key):
+    try:
+        arg_dic[key+'_fh'] = open(eu(arg_dic[key]),'w')
+    except KeyError:
+        pass
+
+#====support parsing=====
+
+def get_012(gt_str):
+    if gt_str[:3] in ["0/0","0|0"]:
+        return "0"
+    elif gt_str[:3] in ["1/1","1|1"]:
+        return "2"
+    elif gt_str[:3] in ["0/1","0|1","1|0"]:
+        return "1"
+    elif gt_str[:3] == "./.":
+        return "N"
+    else:
+        raise ValueError("Unsupported genotype " + gt_str)
+
+
+def get_AA(info_str):
+    aa = info_str.split("AA=")[1][0]
+    return aa
 
 def add_to_countdic(dic,key):
     try:
         dic[key] += 1
     except KeyError:
         dic[key] = 1
+
+def get_info_dic(line):
+    return {k:v for (k,v) in [t.split('=') for t in line[7].split(';')]}
 
 #-----------------------------------------
 #--------parsing functions---------------
@@ -406,11 +418,15 @@ info = ("Adds info header entries for each pair "
 def add_filter_info_setup_fun(arg_dic):
     arg_dic["out_vcf_fh"] = open(eu(arg_dic["out_vcf"]),'w')
     arg_dic["line_counter"] = 0
+    arg_dic["filter_found"] = False
+    arg_dic["filters_added"] = False
 
 def add_filter_info_header_fun(line,arg_dic):
     arg_dic['line_counter'] += 1
     b = len("##FILTER=<ID=")
     if line[:b] == "##FILTER=<ID=":
+        logging.debug("Exisitng filter found: {}".format(line))
+        arg_dic["filter_found"] = True
         for j,e in enumerate(arg_dic['expressions']):
             if line[b:b+len(e)] == e:
                 line = line[:b+len(e)+len(',Description="')] + arg_dic['descriptions'][j] + '">\n'
@@ -418,18 +434,19 @@ def add_filter_info_header_fun(line,arg_dic):
                 del arg_dic['expressions'][j]
                 del arg_dic['descriptions'][j]
                 break
-    elif line[:6] == '#CHROM':
+    elif not arg_dic["filters_added"] and (arg_dic["filter_found"] or (line[:6] == '#CHROM')):
         for e,d in zip(arg_dic['expressions'],arg_dic['descriptions']):
-            out_vcf.write('##FILTER=<ID=' + e + ',Description="' + d + '">\n')
+            arg_dic['out_vcf_fh'].write('##FILTER=<ID=' + e + ',Description="' + d + '">\n')
             logging.info("Adding filter expression {}.".format(e))
-    out_vcf.write(line)
+        arg_dic["filters_added"] = True
+    arg_dic['out_vcf_fh'].write(line)
 
 
 def add_filter_info_cleanup_fun(arg_dic):
     import subprocess
     arg_dic['out_vcf_fh'].flush()
     logging.info("Starting to cat vcf body.")
-    command = ["tail","-n +" + str(arg_dic[line_counter]),arg_dic['in_vcf_fh'].name]
+    command = ["tail","-n +" + str(arg_dic['line_counter']+1),arg_dic['in_vcf_fh'].name]
     p = subprocess.Popen(" ".join(command),shell=True,stdout=arg_dic['out_vcf_fh'])
     #p.wait()
     p.communicate()
@@ -446,46 +463,145 @@ add_analysis('add_filter_info',
                                    'out_vcf':"Filepath to write output vcf to."})
 
 
-#def filter_missing_stats_parse_fun(line,parser_out,):
-#    
-#    snp = ["A","G","C","T"]
-#    novar = [None,"X",'.']
-#    sites_dic = {"total":0,"pass_nosnp":0,"pass_snp":0,"filter_nosnp":0,"filter_snp":0}
-#    N_df = pd.DataFrame(0,columns=sites_dic.keys(),index=reader.samples)
-#    Nxy = np.zeros((len(reader.samples),len(reader.samples)))
-#
-#    parser_out['sites_dic']["total"] += 1
-#    ns = np.array([1 if s.data.GT is None else 0 for s in rec.samples]) #vector of Ns
-#    parser_out['N_df']["total"] +=  ns
-#
-#        Nxy += np.outer(ns,ns)
-#        try:
-#            alt = rec.ALT[0].sequence
-#        except AttributeError:
-#            alt = rec.ALT[0].
-#        is_variant = not alt in novar
-#        if is_variant:
-#            if not rec.FILTER:
-#                category = "pass_snp"
-#
-#            else:
-#                category = "filter_snp"
-#        else:
-#            if not rec.FILTER or (len(rec.FILTER)==1 and ("LowQual" in rec.FILTER) and rec.QUAL>5):
-#                category = "pass_nosnp"
-#            else:
-#                category = "filter_nosnp"
-#        sites_dic[category] += 1
-#        N_df[category] += ns
-#        prev_pos = rec.POS
-#....
-#    Nxy = pd.DataFrame(Nxy,index=reader.samples,columns=reader.samples)
-#    return (sites_dic, N_df, Nxy)
+#----------------vcf_stats-----------------
+
+info = "Print some statistics about the variants in the vcf."
+
+def vcf_stats_setup_fun(arg_dic):
+    try_add_out_fh(arg_dic)
+    arg_dic['var_stats'] = {}
+    arg_dic['filters'] = {}
+
+def vcf_stats_parse_fun(line,arg_dic):
+    add = lambda s: add_to_countdic(arg_dic['var_stats'],s)
+    addf = lambda s: add_to_countdic(arg_dic['filters'],s)
+    add('total')
+    info = get_info_dic(line)
+    ref = line[3]
+    alt = line[4].split(',')
+    pass0 = (line[6] in ['PASS','Pass'])
+    if len(alt) > 1:
+        add('multiallelic')
+    elif len(ref) > 1 or len(alt[0]) > 1:
+        add('indels')
+    elif alt[0] in nucleotides:
+        add('snps')
+    if pass0:
+        add('pass')
+    else:
+        for f in line[6].split(';'):
+            addf(f)
+
+    try:
+        aa = info['AA']
+    except KeyError:
+        return
+    if aa in nucleotides:
+        add('ancestral_known')
+        if pass0:
+            add('pass_ancestral_known')
+            if aa == ref:
+                add('pass_ancestral_is_ref')
+            elif aa == alt[0]:
+                add('pass_ancestral_is_alt')
+            else:
+                add('pass_ancestral_is_third_allele')
 
 
-#---MAIN----FUNCTION-------------
+def vcf_stats_cleanup_fun(arg_dic):
+    arg_dic['var_stats']['filters'] = arg_dic['filters']
+    try:
+        json.dump(arg_dic['var_stats'],arg_dic['out_fh']) 
+    except KeyError:
+        return arg_dic['var_stats']
+
+add_analysis('vcf_stats',
+             {'setup_fun':vcf_stats_setup_fun,
+              'parse_fun':vcf_stats_parse_fun,
+              'cleanup_fun':vcf_stats_cleanup_fun},
+                info,
+                command_line_req_params={'out_fn':\
+                                        "File path to write output json to."})
+
+#-------filter_missing_stats---------
+
+info = ("Parse a whole genome (all sites) VCF "
+        "to get statistics about the number of called "
+        "SNPs and nonsnps. This gives information on the number "
+        "of accessible (i.e., non Filtered, non missing genotype) "
+        " sites both global and per individual.")
+
+out_fns = ["out_filter_count","out_N_count","out_N_corr"]
 
 
+def filter_missing_stats_setup_fun(arg_dic):
+    for fn in out_fns:
+        try_add_out_fh(arg_dic,fn)
+    arg_dic['sites_dic'] = {"total":0,"pass_nosnp":0,
+                            "pass_snp":0,"filter_nosnp":0,"filter_snp":0}
+
+def filter_missing_stats_header_fun(line,arg_dic):
+    if line[:6] == '#CHROM':
+        arg_dic['samples'] = line.strip().split('\t')[9:]
+        arg_dic['N_df'] = pd.DataFrame(0,
+                                        columns=arg_dic['sites_dic'].keys(),
+                                        index=arg_dic['samples'])
+        arg_dic['Nxy'] = np.zeros((len(arg_dic['samples']),len(arg_dic['samples'])))
+
+def filter_missing_stats_parse_fun(line,arg_dic):
+    add = lambda s: add_to_countdic(arg_dic['sites_dic'],s)
+
+    #sites_dic = {"total":0,"pass_nosnp":0,"pass_snp":0,"filter_nosnp":0,"filter_snp":0}
+
+    add("total")
+    ns = np.array([1 if '.' in s.split(':')[0] else 0 for s in line[9:]]) #vector of Ns
+    arg_dic['N_df']["total"] +=  ns
+    arg_dic['Nxy'] += np.outer(ns,ns)
+
+    ref = line[3]
+    alt = line[4].split(',')
+    pass0 = (line[6] in ['PASS','Pass'])
+
+    if pass0:
+        category = 'pass_'
+    else:
+        category = 'filter_'
+
+    if len(alt) == 1 and len(ref) == 1 and len(alt[0]) == 1 and alt[0] in nucleotides:
+        category += 'snp'
+    else:
+        category += 'nosnp'
+
+    add(category)
+    arg_dic['N_df'][category] += ns
+
+def filter_missing_stats_cleanup_fun(arg_dic):
+    N_df = arg_dic['N_df']
+    sites_dic = arg_dic['sites_dic']
+    Nxy = pd.DataFrame(arg_dic['Nxy'],index=arg_dic['samples'],columns=arg_dic['samples'])
+    corr = (Nxy-1./sites_dic["total"]*np.outer(N_df["total"],N_df["total"]))/\
+            np.sqrt(np.outer(N_df["total"]*(1-1./sites_dic["total"]*N_df["total"]),N_df["total"]*(1-1./sites_dic["total"]*N_df["total"])))
+    try:
+        json.dump(sites_dic,arg_dic['out_filter_count_fh'])
+        N_df.to_csv(arg_dic['out_N_count'],sep='\t')
+        corr.to_csv(arg_dic['out_N_corr'],sep='\t')
+    except KeyError:
+        logging.info("At least one output filename not found. Returning results.")
+        return (sites_dic, N_df, corr)
+
+add_analysis('filter_missing_stats',
+             {'setup_fun':filter_missing_stats_setup_fun,
+              'header_fun':filter_missing_stats_header_fun,
+              'parse_fun':filter_missing_stats_parse_fun,
+              'cleanup_fun':filter_missing_stats_cleanup_fun},
+                info,
+                command_line_req_params={'out_filter_count':\
+                                        "File path to write count of filtered sites as json to.",
+                                         'out_N_count':\
+                                        "Tsv path to write per individual missing genotype count to.",
+                                        'out_N_corr':\
+                                        "Tsv path to write cross individual correlations "
+                                        "of missing genotypes to."})
 
 if __name__ == "__main__":
     #import gzip
@@ -493,9 +609,10 @@ if __name__ == "__main__":
     import select
     parser = argparse.ArgumentParser(description="Parse a Variant Call Format (VCF) file.")
     parser.add_argument("--variant",'-V',type = argparse.FileType('r'), default = '-', help="Input vcf filepath.")
-    parser.add_argument("--analysis_type","-T",help="Name of type of analysis, "
+    parser.add_argument("--analysis_type","-T", choices = analyses.keys(),
+                                                 help="Name of type of analysis, "
                                                       "that defines the functions to use. "
-                                                        "Run --show_analyses to see available tools.")
+                                                      "Run --show_analyses to see available tools.")
     
     parser.add_argument("--show_analyses",action='store_true',help="List available analyses and exit.")
     parser.add_argument("--analysis_info",help="Get info for specified analysis and exit.")
@@ -507,6 +624,7 @@ if __name__ == "__main__":
                         help='Minimun level of logging.')
 
     args, additional_args = parser.parse_known_args()
+
 
     logger.setLevel(getattr(logging,args.logging_level))
 
@@ -522,10 +640,30 @@ if __name__ == "__main__":
         assert select.select([args.variant,],[],[],0.0)[0], "Input vcf has no data."
         ana = analyses[args.analysis_type]
         if additional_args:
-            additional_args = " ".join(additional_args).split('--')
+            assert additional_args[0][:2] == '--', "First additional argument does not "\
+                                                   "start with flag '--': {}".format(additional_args[0])
+            arg_dic = {}
+            key = None
+            for arg in additional_args:
+                if arg[:2] == '--':
+                    if key is not None:
+                        if len(arg_dic[key]) == 1:
+                            arg_dic[key] = arg_dic[key][0]
+                        elif len(arg_dic[key]) == 0:
+                            arg_dic[key] = True
+                    key = arg[2:]
+                    arg_dic[key] = []
+                else:
+                    arg_dic[key].append(arg)
+            if key is not None:
+                if len(arg_dic[key]) == 1:
+                    arg_dic[key] = arg_dic[key][0]
+                elif len(arg_dic[key]) == 0:
+                    arg_dic[key] = True
+            #additional_args = "&|?@".join(additional_args).split('--')
             #print additional_args
             #print [a.split(' ',1) for a in additional_args]
-            arg_dic = {k:v.strip() for (k,v) in [a.split(' ',1) for a in additional_args if a]}
+            #arg_dic = {k:v.strip() for (k,v) in [a.split('&|?@',1) for a in additional_args if a]}
         else:
             arg_dic = {}
         non_recognized_args = {}
