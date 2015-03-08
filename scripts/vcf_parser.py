@@ -9,6 +9,7 @@ Todo:
 import sys, os
 import logging
 logger = logging.getLogger()
+logging.basicConfig(format='%(asctime)s %(message)s')
 logger.setLevel(logging.DEBUG)
 eu = os.path.expanduser
 
@@ -113,13 +114,18 @@ class VCFParser(object):
         if arg_dic is None:
             arg_dic = {}
         self.arg_dic = arg_dic
-
+        if 'in_vcf_fh' not in self.arg_dic:
+            self.arg_dic['in_vcf_fh'] = vcf_fh
+        else:
+            logging.warning("Key 'in_vcf_fh' of arg_dic already in use. "
+                                                     " Won't overwrite.")
         self.skip_multiple_entries = skip_multiple_entries
 
     def setup(self):
         logging.info("Starting setup.")
         self.setup_fun(self.arg_dic)
         #self.arg_dic = arg_dic
+
 
     def parse(self):
         """
@@ -391,7 +397,54 @@ add_analysis('add_ancestral_fasta',
                                         'Filepath of fasta with ancestral state.',
                                    'out_vcf':"Filepath to write output vcf to."})
 
-#------------------------
+#-------add_filter_info---------
+
+info = ("Adds info header entries for each pair "
+        "in expressions/descriptions iterables to "
+        "in_vcf and writes it to out_vcf ")
+
+def add_filter_info_setup_fun(arg_dic):
+    arg_dic["out_vcf_fh"] = open(eu(arg_dic["out_vcf"]),'w')
+    arg_dic["line_counter"] = 0
+
+def add_filter_info_header_fun(line,arg_dic):
+    arg_dic['line_counter'] += 1
+    b = len("##FILTER=<ID=")
+    if line[:b] == "##FILTER=<ID=":
+        for j,e in enumerate(arg_dic['expressions']):
+            if line[b:b+len(e)] == e:
+                line = line[:b+len(e)+len(',Description="')] + arg_dic['descriptions'][j] + '">\n'
+                logging.info("Updating filter expression {}.".format(e))
+                del arg_dic['expressions'][j]
+                del arg_dic['descriptions'][j]
+                break
+    elif line[:6] == '#CHROM':
+        for e,d in zip(arg_dic['expressions'],arg_dic['descriptions']):
+            out_vcf.write('##FILTER=<ID=' + e + ',Description="' + d + '">\n')
+            logging.info("Adding filter expression {}.".format(e))
+    out_vcf.write(line)
+
+
+def add_filter_info_cleanup_fun(arg_dic):
+    import subprocess
+    arg_dic['out_vcf_fh'].flush()
+    logging.info("Starting to cat vcf body.")
+    command = ["tail","-n +" + str(arg_dic[line_counter]),arg_dic['in_vcf_fh'].name]
+    p = subprocess.Popen(" ".join(command),shell=True,stdout=arg_dic['out_vcf_fh'])
+    #p.wait()
+    p.communicate()
+
+add_analysis('add_filter_info',
+             {'setup_fun':add_filter_info_setup_fun,
+              'header_fun':add_filter_info_header_fun,
+              'cleanup_fun':add_filter_info_cleanup_fun},
+                info,
+                always_req_params={'expressions':\
+                                        "List of filter expressions to add to the vcf header.",
+                                   'descriptions':\
+                                        'List of filter descriptions to add to the vcf header.',
+                                   'out_vcf':"Filepath to write output vcf to."})
+
 
 #def filter_missing_stats_parse_fun(line,parser_out,):
 #    
@@ -446,16 +499,20 @@ if __name__ == "__main__":
     
     parser.add_argument("--show_analyses",action='store_true',help="List available analyses and exit.")
     parser.add_argument("--analysis_info",help="Get info for specified analysis and exit.")
-    parser.add_argument("--arg_dic",help='key=value pairs to pass as dict to functions. E.g., "foo=bar;test=hallo du"')
+    #parser.add_argument("--arg_dic",help='key=value pairs to pass as dict to functions. E.g., "foo=bar;test=hallo du"')
     parser.add_argument("--no_skip_multiple_entries",action='store_true',
                          help='Do not skip all but the first entry for the same site in the VCF.')
+    parser.add_argument('--logging_level','-l',
+                        choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'],default='INFO',
+                        help='Minimun level of logging.')
 
+    args, additional_args = parser.parse_known_args()
 
-    args = parser.parse_args()
+    logger.setLevel(getattr(logging,args.logging_level))
 
     if args.show_analyses:
         for k in analyses:
-            print k+':', analyses['k']['info']
+            print k+':', analyses[k]['info']
     elif args.analysis_info is not None:
         print analyses[args.analysis_info]
     elif args.analysis_type is not None:
@@ -463,11 +520,27 @@ if __name__ == "__main__":
                                                 "Possible analyses are {}.".format(args.analysis_type,
                                                                                    analyses.keys())
         assert select.select([args.variant,],[],[],0.0)[0], "Input vcf has no data."
-        if args.arg_dic is not None:
-            arg_dic = {k:v for (k,v) in [t.split('=') for t in args.arg_dic.split(';')]}
+        ana = analyses[args.analysis_type]
+        if additional_args:
+            additional_args = " ".join(additional_args).split('--')
+            #print additional_args
+            #print [a.split(' ',1) for a in additional_args]
+            arg_dic = {k:v.strip() for (k,v) in [a.split(' ',1) for a in additional_args if a]}
         else:
             arg_dic = {}
-        check_params(arg_dic,analyses[args.analysis_type]['command_line_req_params'])
+        non_recognized_args = {}
+        for arg in arg_dic:
+            if arg not in ana['always_req_params'] and \
+                arg not in ana['command_line_req_params'] and \
+                arg not in ana['opt_params']:
+                non_recognized_args.update({arg:arg_dic[arg]})
+        logging.info("Standard arguments recognized: {}".format(vars(args)))
+        logging.info("Additional arguments: {}".format(arg_dic))
+        if non_recognized_args:
+            logging.warning("Arguments that were not recognized "
+                            "for this analysis_type: {}".format(non_recognized_args))
+        check_params(arg_dic,ana['command_line_req_params'])
+        
         parser = get_parser(args.variant,args.analysis_type,arg_dic,not args.no_skip_multiple_entries)
         parser.run()
 
@@ -477,4 +550,3 @@ if __name__ == "__main__":
 
 
 
-    
