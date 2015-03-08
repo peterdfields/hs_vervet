@@ -84,7 +84,7 @@ class VCFParser(object):
                                 arg_dic=None,
                         #parse_arg_dic=None, header_arg_dic=None,
                         #setup_arg_dic=None, cleanup_arg_dic=None,
-                                    skip_multiple_entries=True,**kwa):
+                                    skip_multiple_entries=True):
         self.vcf_fh = vcf_fh
         self.parse_fun = parse_fun
         self.header_fun = header_fun
@@ -468,7 +468,7 @@ add_analysis('add_filter_info',
 info = "Print some statistics about the variants in the vcf."
 
 def vcf_stats_setup_fun(arg_dic):
-    try_add_out_fh(arg_dic)
+    try_add_out_fh(arg_dic,'out_fn')
     arg_dic['var_stats'] = {}
     arg_dic['filters'] = {}
 
@@ -511,8 +511,9 @@ def vcf_stats_parse_fun(line,arg_dic):
 def vcf_stats_cleanup_fun(arg_dic):
     arg_dic['var_stats']['filters'] = arg_dic['filters']
     try:
-        json.dump(arg_dic['var_stats'],arg_dic['out_fh']) 
+        json.dump(arg_dic['var_stats'],arg_dic['out_fn_fh']) 
     except KeyError:
+        logging.info("No output file supplied returning result within python.")
         return arg_dic['var_stats']
 
 add_analysis('vcf_stats',
