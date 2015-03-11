@@ -213,14 +213,32 @@ def get_info_dic(line):
 #--------parsing functions---------------
 #-----------------------------------------
 
+#-----vcf_to_012--------
 
-def vcf_to_012_header(line, tsv_fh,*args):
+info = ("Extract genotype information into a tsv file. "
+        "Coding 0 for homozygous reference, 1 for heterozygote "
+        "and 2 for homozygous alternative allele. "
+        "Missing genotypes are coded by 'N'")
+
+def vcf_to_012_setup_fun(arg_dic):
+    try_add_out_fh(arg_dic,'out_tsv')
+
+def vcf_to_012_header_fun(line, arg_dic):
     if line[1:6] == "CHROM":
-        tsv_fh.write("chrom\tpos\t"+line.split("\t",9)[-1])
+        arg_dic['out_tsv_fh'].write("chrom\tpos\t"+line.split("\t",9)[-1])
 
-def vcf_to_012_parse_fun(d, tsv_fh,*args):
+def vcf_to_012_parse_fun(d, arg_dic):
     gt = map(get_012,d[9:])
-    tsv_fh.write("\t".join(d[:2])+"\t"+"\t".join(gt)+"\n")
+    arg_dic['out_tsv_fh'].write("\t".join(d[:2])+"\t"+"\t".join(gt)+"\n")
+
+add_analysis('vcf_to_012',
+             {'setup_fun':vcf_to_012_setup_fun,
+              'parse_fun':vcf_to_012_parse_fun,
+              'header_fun':vcf_to_012_header_fun},
+                info,
+                always_req_params={'out_tsv':\
+                                        "File path to write output tsv to."})
+
 
 
 #-----------
