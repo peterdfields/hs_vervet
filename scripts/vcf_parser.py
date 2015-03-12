@@ -46,7 +46,8 @@ def check_params(arg_dic,req_param_dic):
         if k not in arg_dic:
             raise TypeError('Required parameter {} missing from arg_dic.'.format(k))
 
-def get_parser(vcf_fh,analysis_name,arg_dic,skip_multiple_entries=None):
+def get_parser(vcf_fh,analysis_name,arg_dic,
+                skip_multiple_entries=None,progress_report_interval=50000):
     check_params(arg_dic,analyses[analysis_name]['always_req_params'])
     return VCFParser(vcf_fh,arg_dic=arg_dic,skip_multiple_entries=skip_multiple_entries,
                                                 **analyses[analysis_name]['funs'])
@@ -84,7 +85,7 @@ class VCFParser(object):
                                 arg_dic=None,
                         #parse_arg_dic=None, header_arg_dic=None,
                         #setup_arg_dic=None, cleanup_arg_dic=None,
-                                    skip_multiple_entries=True):
+                                    skip_multiple_entries=True,progress_report_interval=50000):
         self.vcf_fh = vcf_fh
         self.parse_fun = parse_fun
         self.header_fun = header_fun
@@ -122,7 +123,7 @@ class VCFParser(object):
         prev_chrom = None
         prev_pos = -1
         multiple_count = 0
-        for line in self.vcf_fh:
+        for i,line in enumerate(self.vcf_fh):
             if line[0] == "#":
                 logging.warning("Skipping comment line in vcf: {}".format(line))
                 continue
@@ -147,7 +148,8 @@ class VCFParser(object):
             self.parse_fun(d,self.arg_dic)
             prev_chrom = chrom
             prev_pos = pos
-            #if i>10000:
+            if i % progress_report_intervall == 0:
+                logging.info("Parsed {} lines: {} - {}".format(i,chrom,pos))
             #    break
 
     def cleanup(self):
@@ -642,6 +644,9 @@ if __name__ == "__main__":
                         choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'],default='INFO',
                         help='Minimun level of logging.')
 
+    parser.add_argument('--progress_report_interval',
+                        type=int,default=50000,
+                        help='Number of lines after which to report progress. Only output if logging level >= INFO')
     args, additional_args = parser.parse_known_args()
 
 
@@ -698,7 +703,8 @@ if __name__ == "__main__":
                             "for this analysis_type: {}".format(non_recognized_args))
         check_params(arg_dic,ana['command_line_req_params'])
         
-        parser = get_parser(args.variant,args.analysis_type,arg_dic,not args.no_skip_multiple_entries)
+        parser = get_parser(args.variant,args.analysis_type,arg_dic,
+                            not args.no_skip_multiple_entries,progress_report_interval=args.progress_report_interval)
         parser.run()
 
     else:

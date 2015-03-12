@@ -569,7 +569,7 @@ class Step(BaseClass):
             stagein_job = StageJob(direction='in',file_list=in_fn,step=self,stage_analysis_dir=stage_analysis_dir)
 
         for job in self.jobs:
-            job.depends.append(stagein_job)
+            job.afterok.append(stagein_job)
         self.stagein_job = stagein_job
   
 
