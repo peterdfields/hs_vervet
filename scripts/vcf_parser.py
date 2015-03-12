@@ -506,11 +506,17 @@ def vcf_stats_parse_fun(line,arg_dic):
         add('indels')
     elif alt[0] in nucleotides:
         add('snps')
-    if pass0:
-        add('pass')
     else:
-        for f in line[6].split(';'):
-            addf(f)
+        logging.warning("Unknown variant type at {} - {}: {}".format(line[0],line[1],line[3]))
+
+    if float(info['AF'])>0 and float(info['AF'])<1:
+        if pass0:
+            add('pass')
+        else:
+            for f in line[6].split(';'):
+                addf(f)
+    else:
+        addf('non_segregating')
 
     try:
         aa = info['AA']
@@ -518,7 +524,7 @@ def vcf_stats_parse_fun(line,arg_dic):
         return
     if aa in nucleotides:
         add('ancestral_known')
-        if pass0:
+        if pass0 and float(info['AF'])>0 and float(info['AF'])<1:
             add('pass_ancestral_known')
             if aa == ref:
                 add('pass_ancestral_is_ref')
