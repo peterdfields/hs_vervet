@@ -13,6 +13,10 @@ logger = logging.getLogger()
 logging.basicConfig(format='%(levelname)-8s %(asctime)s  %(message)s')
 logger.setLevel(logging.DEBUG)
 eu = os.path.expanduser
+try:
+    import tabix
+except ImportError:
+    logging.warning('pytabix could not be imported. No support for interval use.')
 
 nucleotides = ['A','C','T','G']
 no_var = ['N','.','X']
@@ -119,7 +123,7 @@ class VCFParser(object):
     def parse(self):
         """
         """
-        logging.info("Parsing vcf body.")
+        logging.info("Parsing vcf body of {}.".format(self.vcf_fh))
         prev_chrom = None
         prev_pos = -1
         multiple_count = 0
@@ -150,7 +154,6 @@ class VCFParser(object):
             prev_pos = pos
             if i % progress_report_intervall == 0:
                 logging.info("Parsed {} lines: {} - {}".format(i,chrom,pos))
-            #    break
 
     def cleanup(self):
         """
@@ -171,6 +174,9 @@ class VCFParser(object):
             self.result = None
         logging.info("Run finished.")
 
+
+class ParallelParser(object):
+    pass
 
 
 #------support functions----------------
@@ -507,7 +513,7 @@ def vcf_stats_parse_fun(line,arg_dic):
     elif alt[0] in nucleotides:
         add('snps')
     else:
-        logging.warning("Unknown variant type at {} - {}: {}".format(line[0],line[1],line[3]))
+        logging.warning("Unknown variant type at {} - {}: {}".format(line[0],line[1],line[4]))
 
     if float(info['AF'])>0 and float(info['AF'])<1:
         if pass0:
@@ -584,7 +590,7 @@ def filter_missing_stats_parse_fun(line,arg_dic):
     ns = np.array([1 if '.' in s.split(':')[0] else 0 for s in line[9:]]) #vector of Ns
     arg_dic['N_df']["total"] +=  ns
     arg_dic['Nxy'] += np.outer(ns,ns)
-
+    af = float(get_info_dic(line)['AF'])
     ref = line[3]
     alt = line[4].split(',')
     pass0 = (line[6] in ['PASS','Pass'])
@@ -594,7 +600,7 @@ def filter_missing_stats_parse_fun(line,arg_dic):
     else:
         category = 'filter_'
 
-    if len(alt) == 1 and len(ref) == 1 and len(alt[0]) == 1 and alt[0] in nucleotides:
+    if len(alt) == 1 and len(ref) == 1 and len(alt[0]) == 1 and alt[0] in nucleotides and af>0 and af<1:
         category += 'snp'
     else:
         category += 'nosnp'
@@ -631,9 +637,20 @@ add_analysis('filter_missing_stats',
                                         "of missing genotypes to."})
 
 if __name__ == "__main__":
-    #import gzip
+    import gzip
     import argparse
     import select
+    #def get_interval(interval_string):
+        #"""
+        #Parse Chr3:600-34000 into tuple.
+        #Interval specifications as in samtools.
+        #"""
+        #ist = interval_string.split(':')
+        #chr = ist[0]
+        #try
+        #pos = 
+
+    
     parser = argparse.ArgumentParser(description="Parse a Variant Call Format (VCF) file.")
     parser.add_argument("--variant",'-V',type = argparse.FileType('r'), default = '-', help="Input vcf filepath.")
     parser.add_argument("--analysis_type","-T", choices = analyses.keys(),
@@ -643,18 +660,32 @@ if __name__ == "__main__":
     
     parser.add_argument("--show_analyses",action='store_true',help="List available analyses and exit.")
     parser.add_argument("--analysis_info",help="Get info for specified analysis and exit.")
-    #parser.add_argument("--arg_dic",help='key=value pairs to pass as dict to functions. E.g., "foo=bar;test=hallo du"')
+    parser.add_argument("--intervals",'-L', nargs='*', dest='intervals', action='append',
+                            help='Specify intervals to consider e.g. Chr1:1-50000. '
+                                 'Input vcf must be compressed with bgzip and indexed with tabix.')
     parser.add_argument("--no_skip_multiple_entries",action='store_true',
                          help='Do not skip all but the first entry for the same site in the VCF.')
     parser.add_argument('--logging_level','-l',
                         choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'],default='INFO',
                         help='Minimun level of logging.')
-
     parser.add_argument('--progress_report_interval',
                         type=int,default=50000,
                         help='Number of lines after which to report progress. Only output if logging level >= INFO')
     args, additional_args = parser.parse_known_args()
 
+    args.intervals = [el for elements in args.intervals for el in elements] \
+                                            if args.intervals is not None else []
+
+    extension = os.path.splitext(args.variant.name)[-1]
+
+    if extension == 'gz':
+        #if args.intervals:
+        #    variants = [tabix.open()]
+        args.variant = tabix.open(args.variant.name)
+    elif  extension != 'vcf':
+        logging.warning("Unrecognized file extension. Assuming this is a vcf: {}".format(args.variant.name))
+    #print args.intervals
+    sys.exit()
 
     logger.setLevel(getattr(logging,args.logging_level))
 
@@ -690,10 +721,6 @@ if __name__ == "__main__":
                     arg_dic[key] = arg_dic[key][0]
                 elif len(arg_dic[key]) == 0:
                     arg_dic[key] = True
-            #additional_args = "&|?@".join(additional_args).split('--')
-            #print additional_args
-            #print [a.split(' ',1) for a in additional_args]
-            #arg_dic = {k:v.strip() for (k,v) in [a.split('&|?@',1) for a in additional_args if a]}
         else:
             arg_dic = {}
         non_recognized_args = {}
@@ -708,10 +735,30 @@ if __name__ == "__main__":
             logging.warning("Arguments that were not recognized "
                             "for this analysis_type: {}".format(non_recognized_args))
         check_params(arg_dic,ana['command_line_req_params'])
-        
-        parser = get_parser(args.variant,args.analysis_type,arg_dic,
-                            not args.no_skip_multiple_entries,progress_report_interval=args.progress_report_interval)
-        parser.run()
+
+        #serial parsing of the intervals
+        if args.intervals:
+            fh = args.variant.querys(args.intervals[0])
+            parser = get_parser(fh,args.analysis_type,arg_dic,
+                                not args.no_skip_multiple_entries,progress_report_interval=args.progress_report_interval)
+            if parser.setup_fun is not None:
+                parser.setup()
+            parser.parse_header()
+            if parser.parse_fun is not None:
+                parser.parse()
+            for iv in args.intervals[1:]:
+                fh = args.variant.querys(iv)
+                parser = get_parser(fh,args.analysis_type,arg_dic,
+                                not args.no_skip_multiple_entries,progress_report_interval=args.progress_report_interval)
+                if parser.parse_fun is not None:
+                    parser.parse()
+                else:
+                    logging.warning("No parse function supplied. There is no point in specifying intervals.")
+            if parser.cleanup_fun is not None:
+                parser.cleanup()
+        else:
+             parser = get_parser(args.variant,args.analysis_type,arg_dic,
+                                not args.no_skip_multiple_entries,progress_report_interval=args.progress_report_interval)
 
     else:
         logging.warning("No analysis specified. Run with flag -h for options.")
