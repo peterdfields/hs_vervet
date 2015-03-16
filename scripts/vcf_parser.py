@@ -5,21 +5,425 @@ See argparse help.
 Todo:
 -- parallel
 """
-import sys, os, json
+import sys, os, json, uuid
 import logging
 import numpy as np
 import pandas as pd
+import subprocess
+import multiprocessing as mp
 logger = logging.getLogger()
-logging.basicConfig(format='%(levelname)-8s %(asctime)s  %(message)s')
+#logging.basicConfig(format='%(levelname)-8s %(asctime)s  %(message)s')
+logging.basicConfig(format='%(levelname)-8s %(asctime)s %(funcName)20s()  %(message)s')
 logger.setLevel(logging.DEBUG)
+
 eu = os.path.expanduser
 try:
     import tabix
 except ImportError:
     logging.warning('pytabix could not be imported. No support for interval use.')
 
+# assure that all errors get logged
+def excepthook(*args):
+  logging.getLogger().error('Uncaught exception:', exc_info=args)
+sys.excepthook = excepthook
+
+
+
 nucleotides = ['A','C','T','G']
 no_var = ['N','.','X']
+
+
+
+
+
+#---------main object-------------------
+
+
+class Parser(object):
+    """
+    Generic parser for text file.
+    Input:
+    in_fh ... file handle of input text file
+    parse_fun ... Function applied to each line of the vcf body.
+                  Takes as input a split line (list) and two
+                    dictionaries with additional parameters and variables,
+                    e.g, to count something.
+                    The first dictionary is its 
+    header_fun ... Function applied to each line of the vcf header.
+                   Takes as input a line (string) abd a dictionary
+                    with additional parameters and variables.
+    setup_fun ... Function applied to all input dictionaries to modify 
+                   them if needed, e.g., to initialise the variables used
+                    by parse fun.
+    parse_fun ... Function applied to each line of the vcf body.
+
+    Examples:
+    
+    
+
+    """
+    def __init__(self,in_fh, sep='\t',parse_fun=None, header_fun=None,
+                               setup_fun=None, cleanup_fun=None,
+                                output_fun = None,
+                                arg_dic=None,
+                                    skip_multiple_entries=True,
+                                    progress_report_interval=50000,**kwa):
+        self.in_fh = in_fh
+        self.sep = sep
+        self.parse_fun = parse_fun
+        self.header_fun = header_fun
+        self.setup_fun = setup_fun
+        self.cleanup_fun = cleanup_fun
+        self.output_fun = output_fun
+        if arg_dic is None:
+            arg_dic = {}
+        self.arg_dic = arg_dic
+        if 'in_fh' in self.arg_dic:
+            logging.warning("Key 'in_fh' of arg_dic already in use. "
+                                                     "Overwrite!")
+        self.arg_dic['in_fh'] = in_fh
+        self.skip_multiple_entries = skip_multiple_entries
+        self.progress_report_interval = progress_report_interval
+        self.finished = False
+ 
+
+    def _split_line(self,fh):
+        while True:
+            yield fh.next().strip().split(self.sep)
+
+
+    def setup(self):
+        if self.setup_fun is not None:
+            logging.info("Starting setup.")
+            self.setup_fun(self.arg_dic)
+
+
+    def parse_header(self):
+        logging.info("Parsing header.")
+        for line in self.in_fh:
+            if line[0] == '#':
+                if self.header_fun is not None:
+                    self.header_fun(line,self.arg_dic)
+            else:
+                break
+
+
+    def parse(self,fh):
+        """
+        """
+        if self.parse_fun is not None:
+            logging.info("Parsing vcf body of {}.".format(fh))
+            prev_chrom = None
+            prev_pos = -1
+            multiple_count = 0
+            line_it = self._split_line(fh)
+            for i,d in enumerate(line_it):
+                if d[0][0] == "#":
+                    logging.warning("Skipping comment line in vcf: {}".format(line))
+                    continue
+                chrom = d[0]
+                pos = int(d[1])
+                if chrom == prev_chrom:
+                    assert pos >= prev_pos, "vcf positions not in "\
+                                            "ascending order at: {}:{},{}".format(chrom,prev_pos,pos)
+                    if pos == prev_pos:
+                        multiple_count += 1
+                        if mutiple_count > 100:
+                            logging.warning("Omitting further multiple entry warnings.")
+                        else:
+                            if not skip_multiple_entries:
+                                logging.warning("Multiple entries for pos {}:{}.\n"
+                                          "Keeping all entries.".format(chrom,pos))
+                            else:
+                                logging.warning("Warning, multiple entries for pos {}:{}.\n"
+                                      "Skipping all but the first.".format(chrom,pos))
+                                continue
+                self.parse_fun(d,self.arg_dic)
+                prev_chrom = chrom
+                prev_pos = pos
+                if i % self.progress_report_interval == 0:
+                    logging.info("Parsed {} lines: {} - {}".format(i,chrom,pos))
+            logging.info("Finished: {} lines at {} {}".format(i,chrom,pos))
+
+    def cleanup(self):
+        """
+        """
+        if self.cleanup_fun is not None:
+            logging.info("Starting cleanup.")
+            self.cleanup_fun(self.arg_dic)
+
+    def output(self):
+        if self.output_fun is not None:
+            logging.info("Creating output.")
+            self.result = self.output_fun(self.arg_dic)
+        else:
+            self.result = None
+        self.finished = True
+
+    def run(self):
+        self.setup()
+        self.parse_header()
+        self.parse(self.in_fh)
+        self.cleanup()
+        self.output()
+        logging.info("Run finished.")
+
+
+class SerialParser(Parser):
+    """
+    Parse several regions serially.
+    Only the parse function is applied to each
+    (tabix) file handle.
+    Input:
+    vcf_fh ... file handle of vcf 
+               (must be tabixed and opened with gvcf)
+    intervals ... list of string intervals, in Samtools format,
+                                            such as Chr1:1-5000
+    kwa ... same keyword arguments as VCFParser.
+    
+    Note that SerialParser does not support seperator specification,
+    since pytabix does the line splitting automatically.
+    """
+    def __init__(self,in_fh,intervals,auto_tabix=False, **kwa):
+        super(SerialParser, self).__init__(in_fh,**kwa)
+        self.intervals = intervals
+        self.tabix_fh = tabix.open(in_fh.name)
+        try:
+            self._query_tabix(intervals[0])
+        except tabix.TabixError, e:
+            logging.error("Tabix raised error: {}".format(str(e)))
+            logging.warning("Compress file with bgzip and produce tabix index.")
+            raise e
+            #if auto_tabix:
+            #    logging.warning("Tabix raised error: {}".format(str(e)))
+            #    p=subrocess.Popen([tabix])
+
+
+    def _query_tabix(self,interval):
+        try:
+            return self.tabix_fh.querys(interval)
+        except TypeError:
+            try:
+                return self.tabix_fh.query(*interval)
+            except TypeError, e:
+                logging.error("Chromosome must be string and position integer."
+                                               " e.g. ('Chr1',1000000,1005000). "
+                                "Alternatively use string 'Chr:1000000-1005000'")
+                raise e
+        
+
+    def _split_line(self,fh):
+        """
+        The line in the tabix iterator is already split.
+        """
+        while True:
+            yield fh.next()
+
+
+
+    def run_no_output(self):
+        self.setup()
+        self.parse_header()
+        if self.parse_fun is not None:
+            for interval in self.intervals:
+                fh = self._query_tabix(interval)
+                self.parse(fh)
+        else:
+            logging.warning("No vcf body parse function supplied.")
+        self.cleanup()
+        logging.info("Run finished.")
+
+    def run(self):
+        self.run_no_output()
+        self.output()
+
+
+#class ParallelParser(SerialParser):
+#    """
+#    Implements a split-apply-reduce framework
+#    for parallel parsing on multiple cpus.
+#
+#    make two different classes !!!
+#    2 Modes:
+#    Parallel single region.
+#    Parallel by region.
+#    """
+#    def __init__(self, in_fh, intervals, ncpus, **kwa):
+#        super(ParallelParser, self).__init__(in_fh, intervals, **kwa)
+#        if len(intervals) == 1:
+#            self.ncpus = ncpus
+#            logging.info("One interval specified, entering single_region_parallel mode with {} cores.".format(ncpus))
+#            self.mode = 'single_region_parallel'
+#            region = intervals[0]
+#            try:
+#                self.tabix_fh.querys(region)
+#                chrompos = region.split(":")
+#                chrom = chrompos[0]
+#                try:
+#                    startend = chrompos[1].split('-')
+#                    start = int(startend[0])
+#                    try:
+#                        end = int(startend[1])
+#                    except:
+#                        end = None
+#                except IndexError:
+#                    start = None
+#                    end = None
+#            except TypeError:
+#                chrom = region[0]
+#                start = region[1]
+#                end = region[2]
+#            self.chrom = chrom
+#            self.start = start
+#            self.end = end
+#            if self.start is None:
+#                self.start = 0
+#            if self.end is None:
+#                self.parse_header = self.parse_header_contig_len
+#        else:
+#            self.ncpus = min(len(intervals),ncpus)
+#            logging.info("{} intervals specified, entering parallel_by_region "
+#                                        "mode, using {} cores.".format(self.ncpus)
+#            self.mode = 'parallel_by_region'
+#
+#
+#    def parse_header_contig_len(self):
+#        logging.info("Parsing header.")
+#        for line in self.in_fh:
+#            if line[0] == '#':
+#                if line[:9] == '##contig=':
+#                    contig_dic = get_header_line_dic(line)
+#                    if contig_dic['ID'] == chrom:
+#                        length = int(contig_dic['length'])
+#                        self.end = length
+#                if self.header_fun is not None:
+#                    self.header_fun(line,self.arg_dic)
+#            else:
+#                break
+#    #def parse_vcf(self,header_fun):
+
+class MultiRegionParallelParser(SerialParser):
+    def __init__(self, in_fh, intervals, reduce_fun = None,
+                            ncpus='auto',
+                            line_write_vars=None, tmp_dir='.',**kwa):
+        super(MultiRegionParallelParser, self).__init__(in_fh,intervals,**kwa)
+        self.reduce_fun = reduce_fun
+        if line_write_vars is None:
+            line_write_vars = []
+        self.line_write_vars = line_write_vars
+        arg_dic = kwa['arg_dic']
+        del kwa['arg_dic']
+        kwa['header_fun'] = None
+        self.parsers_kwa = kwa
+        if ncpus == 'auto':
+            ncpus = mp.cpu_count()
+        self.ncpus = min(len(intervals),ncpus)
+        logging.info("{} regions specified.  Parallelising by region. "
+                     "Using {} processes.".format(len(intervals),self.ncpus))
+        self.tmp_dir = tmp_dir
+
+
+    def setup_parsers(self):
+        parsers = []
+        temp_files = []
+        for interval in self.intervals:
+            p_arg_dic = self.arg_dic.copy()
+            for var in self.line_write_vars:
+                tmp_fn = jn(self.tmp_dir,var+str(uuid.uuid4()) + \
+                                        "_" + str(intv[1]) + ".tmp")
+                p_arg_dic[var] = tmp_fn
+                temp_files.append(tmp_fn)
+            parsers.append(SerialParser(self.in_fh, [interval],
+                                        arg_dic=p_arg_dic, **self.parsers_kwa))
+            #print 'done'
+            #sys.exit(0)
+        self.parsers = parsers
+        self.temp_files = temp_files
+
+    def reduce(self):
+        if self.reduce_fun is not None:
+            logging.info("Starting reduce step.")
+            self.reduce_fun([p.arg_dic for p in self.parsers])
+        else:
+            logging.warning("No reduce function given. Won't do anything.")
+
+    def run(self):
+        self.setup()
+        self.parse_header()
+        self.setup_parsers()
+        #self.parsers[0].run()
+        #import pdb
+        #pdb.set_trace()
+        #def r(parser):
+        #    parser.run_no_output()
+        pool = mp.Pool()   
+        pool.map(lambda x:x*2,range(10))
+        print pool
+        
+        #parmap(r,self.parsers,self.ncpus)
+        #self.reduce()
+        #self.output()
+
+def r(parser):
+    parser.run_no_output()
+
+class SingleRegionParallelParser(MultiRegionParallelParser):
+    def __init__(self, in_fh, intervals, ncpus='auto',
+                            line_write_vars=None, **kwa):
+        assert len(intervals) == 1, ("ParallelSingleRegionParser requires a "
+                                                           "single interval.")
+        self.ncpus = ncpus
+        #logging.info("One interval specified, starting single_region_parallel mode with {} cores.".format(ncpus))
+        region = intervals[0]
+        try:
+            self.tabix_fh.querys(region)
+            chrompos = region.split(":")
+            chrom = chrompos[0]
+            try:
+                startend = chrompos[1].split('-')
+                start = int(startend[0])
+                try:
+                    end = int(startend[1])
+                except:
+                    end = None
+            except IndexError:
+                start = None
+                end = None
+        except TypeError:
+            chrom = region[0]
+            start = region[1]
+            end = region[2]
+        self.chrom = chrom
+        self.start = start
+        self.end = end
+        if self.start is None:
+            self.start = 0
+        if self.end is None:
+            self.parse_header = self.parse_header_contig_len
+            logging.info("No chromosome end specified, searching for 'contig'"
+                         "tag in vcf header.")
+     #   make_intervals()
+
+        super(ParallelSingleRegionParser, self).__init__(in_fh, intervals,ncpus, **kwa)
+
+    #def self.
+
+    def parse_header_contig_len(self):
+        logging.info("Parsing header.")
+        for line in self.in_fh:
+            if line[0] == '#':
+                if line[:9] == '##contig=':
+                    contig_dic = get_header_line_dic(line)
+                    if contig_dic['ID'] == chrom:
+                        length = int(contig_dic['length'])
+                        self.end = length
+                if self.header_fun is not None:
+                    self.header_fun(line,self.arg_dic)
+            else:
+                break
+
+
+#--------------------------------------------------------
 
 analyses = {}
 def add_analysis(name,funs,info='',always_req_params=None,
@@ -48,135 +452,66 @@ def check_params(arg_dic,req_param_dic):
     """
     for k in req_param_dic:
         if k not in arg_dic:
-            raise TypeError('Required parameter {} missing from arg_dic.'.format(k))
+            raise TypeError('Required parameter --{} <{}> '
+                            'missing from arg_dic.'.format(k,k))
 
-def get_parser(vcf_fh,analysis_name,arg_dic,
-                skip_multiple_entries=None,progress_report_interval=50000):
-    check_params(arg_dic,analyses[analysis_name]['always_req_params'])
-    return VCFParser(vcf_fh,arg_dic=arg_dic,skip_multiple_entries=skip_multiple_entries,
-                                                **analyses[analysis_name]['funs'])
-
-
-
-
-#---------main object-------------------
-
-class VCFParser(object):
-    """
-    Generic parser for VCF file.
-    Input:
-    vcf_fh ... file handle to input vcf file
-    parse_fun ... Function applied to each line of the vcf body.
-                  Takes as input a split line (list) and two
-                    dictionaries with additional parameters and variables,
-                    e.g, to count something.
-                    The first dictionary is its 
-    header_fun ... Function applied to each line of the vcf header.
-                   Takes as input a line (string) abd a dictionary
-                    with additional parameters and variables.
-    setup_fun ... Function applied to all input dictionaries to modify 
-                   them if needed, e.g., to initialise the variables used
-                    by parse fun.
-    parse_fun ... Function applied to each line of the vcf body.
-
-    Examples:
-    
-    
-
-    """
-    def __init__(self,vcf_fh, parse_fun=None, header_fun=None,
-                               setup_fun=None, cleanup_fun=None,
-                                arg_dic=None,
-                        #parse_arg_dic=None, header_arg_dic=None,
-                        #setup_arg_dic=None, cleanup_arg_dic=None,
-                                    skip_multiple_entries=True,progress_report_interval=50000):
-        self.vcf_fh = vcf_fh
-        self.parse_fun = parse_fun
-        self.header_fun = header_fun
-        self.setup_fun = setup_fun
-        self.cleanup_fun = cleanup_fun
-        if arg_dic is None:
-            arg_dic = {}
-        self.arg_dic = arg_dic
-        if 'in_vcf_fh' not in self.arg_dic:
-            self.arg_dic['in_vcf_fh'] = vcf_fh
+def get_parser(vcf_fh,analysis,**kwa):
+    check_params(kwa['arg_dic'],analysis['always_req_params'])
+    kwa.update(analysis['funs'])
+    if not 'intervals' in kwa or not kwa['intervals']:
+        #if 'intervals' in kwa:
+        #    del kwa['intervals']
+        if 'ncpus' in kwa and kwa['ncpus'] > 1:
+            logging.warning("For ncpus>1, specify at least one interval,  "
+                            "e.g., -L Chr1. Falling back to single process...")
+        #    del kwa['ncpus']
+        logging.info("Initialising Parser.")
+        parser = Parser(vcf_fh,**kwa)
+    elif 'ncpus' in kwa and kwa['ncpus'] > 1:
+        assert 'reduce_fun' in analysis['funs'],("This analysis does not support "
+                                                 "parallel execution, remove "
+                                                 "--ncpus option.")
+        try:
+            kwa['line_write_vars'] = analysis['line_write_vars']
+        except KeyError:
+            logging.warning('Analysis has no key "line_write_vars". Assuming '
+                            'that there is no output written line by line.')
+        if len(kwa['intervals']) == 1:
+            logging.info("Initialising SingleRegionParallelParser.")
+            parser = SingleRegionParallelParser(vcf_fh,**kwa)
         else:
-            logging.warning("Key 'in_vcf_fh' of arg_dic already in use. "
-                                                     " Won't overwrite.")
-        self.skip_multiple_entries = skip_multiple_entries
+            logging.info("Initialising MultiRegionParallelParser.")
+            parser = MultiRegionParallelParser(vcf_fh,**kwa)
+    else:
+        logging.info("Initialising SerialParser.")
+        parser = SerialParser(vcf_fh,**kwa)
+    return parser
 
-    def setup(self):
-        logging.info("Starting setup.")
-        self.setup_fun(self.arg_dic)
-        #self.arg_dic = arg_dic
+#parallel support
 
+def fun(f,q_in,q_out):
+    while True:
+        i,x = q_in.get()
+        if i is None:
+            break
+        q_out.put((i,f(x)))
 
-    def parse_header(self):
-        logging.info("Parsing header.")
-        for line in self.vcf_fh:
-            if line[0] == '#':
-                if self.header_fun is not None:
-                    self.header_fun(line,self.arg_dic)
-            else:
-                break
+def parmap(f, X, nprocs):
+    q_in   = mp.Queue(1)
+    q_out  = mp.Queue()
 
-    def parse(self):
-        """
-        """
-        logging.info("Parsing vcf body of {}.".format(self.vcf_fh))
-        prev_chrom = None
-        prev_pos = -1
-        multiple_count = 0
-        for i,line in enumerate(self.vcf_fh):
-            if line[0] == "#":
-                logging.warning("Skipping comment line in vcf: {}".format(line))
-                continue
-            d = line.strip().split("\t")
-            chrom = d[0]
-            pos = int(d[1])
-            if chrom == prev_chrom:
-                assert pos >= prev_pos, "vcf positions not in "\
-                                        "ascending order at: {}:{},{}".format(chrom,prev_pos,pos)
-                if pos == prev_pos:
-                    multiple_count += 1
-                    if mutiple_count > 100:
-                        logging.warning("Omitting further multiple entry warnings.")
-                    else:
-                        if not skip_multiple_entries:
-                            logging.warning("Multiple entries for pos {}:{}.\n"
-                                      "Keeping all entries.".format(chrom,pos))
-                        else:
-                            logging.warning("Warning, multiple entries for pos {}:{}.\n"
-                                  "Skipping all but the first.".format(chrom,pos))
-                            continue
-            self.parse_fun(d,self.arg_dic)
-            prev_chrom = chrom
-            prev_pos = pos
-            if i % progress_report_intervall == 0:
-                logging.info("Parsed {} lines: {} - {}".format(i,chrom,pos))
+    proc = [mp.Process(target=fun,args=(f,q_in,q_out)) for _ in range(nprocs)]
+    for p in proc:
+        p.daemon = True
+        p.start()
 
-    def cleanup(self):
-        """
-        """
-        logging.info("Starting cleanup.")
-        self.result = self.cleanup_fun(self.arg_dic)
+    sent = [q_in.put((i,x)) for i,x in enumerate(X)]
+    [q_in.put((None,None)) for _ in range(nprocs)]
+    res = [q_out.get() for _ in range(len(sent))]
 
+    [p.join() for p in proc]
 
-    def run(self):
-        if self.setup_fun is not None:
-            self.setup()
-        self.parse_header()
-        if self.parse_fun is not None:
-            self.parse()
-        if self.cleanup_fun is not None:
-            self.cleanup()
-        else:
-            self.result = None
-        logging.info("Run finished.")
-
-
-class ParallelParser(object):
-    pass
+    return [x for i,x in sorted(res)]
 
 
 #------support functions----------------
@@ -190,6 +525,11 @@ def try_add_out_fh(arg_dic,key):
         pass
 
 #====support parsing=====
+
+def get_header_line_dic(line):
+    dic = {k:v for t in line.strip().split('=<')[1][:-1].split(',') for k,v in t.split("=")}
+    return dic
+
 
 def get_012(gt_str):
     if gt_str[:3] in ["0/0","0|0"]:
@@ -213,6 +553,17 @@ def add_to_countdic(dic,key):
         dic[key] += 1
     except KeyError:
         dic[key] = 1
+
+def sum_countdics(countdics):
+    tot_countdic = {}
+    for countdic in countdics:
+        for k,v in countdic.iteritems():
+            try:
+                tot_countdic['k'] += v
+            except KeyError:
+                tot_countdic['k'] = v
+    return tot_countdic
+
 
 def get_info_dic(line):
     return {k:v for (k,v) in [t.split('=') for t in line[7].split(';')]}
@@ -373,21 +724,32 @@ def get_filter_stats_parse_fun(line,arg_dic):
     add_to_countdic(arg_dic['count_dic'],'n_sites')
     add_to_countdic(arg_dic['count_dic'],filters)
 
+
 def get_filter_stats_cleanup_fun(arg_dic):
-    import pandas as pd
     filter_info = pd.Series(arg_dic['count_dic'].values(),
                                 index=arg_dic['count_dic'].keys())
     filter_info.sort(inplace=True,ascending=False)
+    arg_dic['filter_info'] = filter_info
+
+def get_filter_stats_reduce_fun(arg_dic,arg_dics):
+    fi = arg_dics[0]['filter_info']
+    for ad in arg_dics[1:]: 
+        fi = fi.add(ad['filter_info'], fill_value=0) 
+    arg_dics['filter_info'] = fi
+
+def get_filter_stats_output_fun(arg_dic):
     try:
-        filter_info.to_csv(arg_dic['out_fh'],sep='\t')
+        arg_dic['filter_info'].to_csv(arg_dic['out_fh'],sep='\t')
     except KeyError:
         return filter_info
-    #json.dump(countdic,open(out_fn,'w'))
+
 
 add_analysis('get_filter_stats',
              {'setup_fun':get_filter_stats_setup_fun,
               'parse_fun':get_filter_stats_parse_fun,
-               'cleanup_fun':get_filter_stats_cleanup_fun},
+              'reduce_fun':get_filter_stats_parse_fun,
+               'cleanup_fun':get_filter_stats_cleanup_fun,
+               'output_fun':get_filter_stats_cleanup_fun},
                 info,
                     command_line_req_params={'out_fn':"Filename to write to."})
 
@@ -468,8 +830,8 @@ def add_filter_info_header_fun(line,arg_dic):
     arg_dic['out_vcf_fh'].write(line)
 
 
+
 def add_filter_info_cleanup_fun(arg_dic):
-    import subprocess
     arg_dic['out_vcf_fh'].flush()
     logging.info("Starting to cat vcf body.")
     command = ["tail","-n +" + str(arg_dic['line_counter']+1),arg_dic['in_vcf_fh'].name]
@@ -568,7 +930,7 @@ out_fns = ["out_filter_count","out_N_count","out_N_corr"]
 
 
 def filter_missing_stats_setup_fun(arg_dic):
-    for fn in out_fns:
+    for fn in ["out_filter_count","out_N_count","out_N_corr"]:
         try_add_out_fh(arg_dic,fn)
     arg_dic['sites_dic'] = {"total":0,"pass_nosnp":0,
                             "pass_snp":0,"filter_nosnp":0,"filter_snp":0}
@@ -590,7 +952,6 @@ def filter_missing_stats_parse_fun(line,arg_dic):
     ns = np.array([1 if '.' in s.split(':')[0] else 0 for s in line[9:]]) #vector of Ns
     arg_dic['N_df']["total"] +=  ns
     arg_dic['Nxy'] += np.outer(ns,ns)
-    af = float(get_info_dic(line)['AF'])
     ref = line[3]
     alt = line[4].split(',')
     pass0 = (line[6] in ['PASS','Pass'])
@@ -599,16 +960,24 @@ def filter_missing_stats_parse_fun(line,arg_dic):
         category = 'pass_'
     else:
         category = 'filter_'
-
-    if len(alt) == 1 and len(ref) == 1 and len(alt[0]) == 1 and alt[0] in nucleotides and af>0 and af<1:
-        category += 'snp'
-    else:
+    try:
+        af = float(get_info_dic(line)['AF'].split(',')[0])
+        if len(alt) == 1 and len(ref) == 1 and len(alt[0]) == 1 and alt[0] in nucleotides and af>0 and af<1:
+            category += 'snp'
+        else:
+            category += 'nosnp'
+    except KeyError:
         category += 'nosnp'
 
     add(category)
     arg_dic['N_df'][category] += ns
 
-def filter_missing_stats_cleanup_fun(arg_dic):
+def filter_missing_stats_reduce_fun(arg_dic,arg_dics):
+    arg_dic['N_df'] = sum([d['N_df'] for d in arg_dics])
+    arg_dic['sites_dic'] = sum_countdics([d['sites_dic'] for d in arg_dics])
+    arg_dic['Nxy'] = sum([d['N_xy'] for d in arg_dics])
+
+def filter_missing_stats_output_fun(arg_dic):
     N_df = arg_dic['N_df']
     sites_dic = arg_dic['sites_dic']
     Nxy = pd.DataFrame(arg_dic['Nxy'],index=arg_dic['samples'],columns=arg_dic['samples'])
@@ -626,15 +995,17 @@ add_analysis('filter_missing_stats',
              {'setup_fun':filter_missing_stats_setup_fun,
               'header_fun':filter_missing_stats_header_fun,
               'parse_fun':filter_missing_stats_parse_fun,
-              'cleanup_fun':filter_missing_stats_cleanup_fun},
+              'reduce_fun':filter_missing_stats_reduce_fun,
+              'output_fun':filter_missing_stats_output_fun},
                 info,
-                command_line_req_params={'out_filter_count':\
-                                        "File path to write count of filtered sites as json to.",
-                                         'out_N_count':\
-                                        "Tsv path to write per individual missing genotype count to.",
-                                        'out_N_corr':\
-                                        "Tsv path to write cross individual correlations "
-                                        "of missing genotypes to."})
+                command_line_req_params=\
+                {'out_filter_count':\
+                        "File path to write count of filtered sites as json to.",
+                 'out_N_count':\
+                        "Tsv path to write per individual missing genotype count to.",
+                 'out_N_corr':\
+                        "Tsv path to write cross individual correlations "
+                                                "of missing genotypes to."})
 
 if __name__ == "__main__":
     import gzip
@@ -662,30 +1033,41 @@ if __name__ == "__main__":
     parser.add_argument("--analysis_info",help="Get info for specified analysis and exit.")
     parser.add_argument("--intervals",'-L', nargs='*', dest='intervals', action='append',
                             help='Specify intervals to consider e.g. Chr1:1-50000. '
-                                 'Input vcf must be compressed with bgzip and indexed with tabix.')
+                                 'Input vcf must be compressed with bgzip and indexed '
+                                                                          'with tabix.')
+    parser.add_argument("--ncpus", '-nct',
+                        type=int, default=1,
+                                  help='Number of processes for parallel parsing. '
+                                       ' Requires at least one interval to be '
+                                       'specified '
+                                       'with -L. \n'
+                                       '1) If a single interval is '
+                                       'specified (e.g. -L Chr1:1-5000000), '
+                                       'this interval will be split into equal parts. '
+                                       'If start/end are not given, we try to infer '
+                                       'them from the VCF header (tag contig=...). \n'
+                                       '2) If multiple intervals are specified, '
+                                       'we parallelise across intervals. \n'
+                                       'Parallel parsing is not implemented for all '
+                                       'analyses.')
     parser.add_argument("--no_skip_multiple_entries",action='store_true',
                          help='Do not skip all but the first entry for the same site in the VCF.')
     parser.add_argument('--logging_level','-l',
-                        choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'],default='INFO',
-                        help='Minimun level of logging.')
+                        choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'],
+                        default='INFO',
+                                                help='Minimun level of logging.')
     parser.add_argument('--progress_report_interval',
-                        type=int,default=50000,
-                        help='Number of lines after which to report progress. Only output if logging level >= INFO')
+                        type=int, default=200000,
+                        help='Number of lines after which to report progress. '
+                                            'Only output if logging level >= INFO')
     args, additional_args = parser.parse_known_args()
 
-    args.intervals = [el for elements in args.intervals for el in elements] \
-                                            if args.intervals is not None else []
-
-    extension = os.path.splitext(args.variant.name)[-1]
-
-    if extension == 'gz':
-        #if args.intervals:
-        #    variants = [tabix.open()]
-        args.variant = tabix.open(args.variant.name)
-    elif  extension != 'vcf':
-        logging.warning("Unrecognized file extension. Assuming this is a vcf: {}".format(args.variant.name))
     #print args.intervals
-    sys.exit()
+    #for line in args.variant:
+    #    print line
+    #    break
+    #print args.variant.name
+    #sys.exit()
 
     logger.setLevel(getattr(logging,args.logging_level))
 
@@ -696,9 +1078,27 @@ if __name__ == "__main__":
         print analyses[args.analysis_info]
     elif args.analysis_type is not None:
         assert args.analysis_type in analyses, "Analysis {} does not exist."\
-                                                "Possible analyses are {}.".format(args.analysis_type,
-                                                                                   analyses.keys())
-        assert select.select([args.variant,],[],[],0.0)[0], "Input vcf has no data."
+                                               "Possible analyses are {}."\
+                                               .format(args.analysis_type,
+                                                            analyses.keys())
+        try:
+            assert select.select([args.variant,],[],[],0.0)[0], "Input vcf has no data."
+        except TypeError: #the above check does not work for tabix
+            pass
+
+        args.intervals = [el for elements in args.intervals for el in elements] \
+                                                if args.intervals is not None else []
+        extension = os.path.splitext(args.variant.name)[-1]
+        if extension == '.gz':
+            args.variant = gzip.open(args.variant.name)
+        else:
+            assert not intervals,("Interval mode (-L) only supported on bgzipped "
+                                 "files with tabix index. But input has not ending .gz")
+            if  extension != '.vcf':
+                logging.warning("Unrecognized file extension. "
+                                "Assuming this is a vcf: {}".format(args.variant.name))
+
+
         ana = analyses[args.analysis_type]
         if additional_args:
             assert additional_args[0][:2] == '--', "First additional argument does not "\
@@ -736,29 +1136,12 @@ if __name__ == "__main__":
                             "for this analysis_type: {}".format(non_recognized_args))
         check_params(arg_dic,ana['command_line_req_params'])
 
-        #serial parsing of the intervals
-        if args.intervals:
-            fh = args.variant.querys(args.intervals[0])
-            parser = get_parser(fh,args.analysis_type,arg_dic,
-                                not args.no_skip_multiple_entries,progress_report_interval=args.progress_report_interval)
-            if parser.setup_fun is not None:
-                parser.setup()
-            parser.parse_header()
-            if parser.parse_fun is not None:
-                parser.parse()
-            for iv in args.intervals[1:]:
-                fh = args.variant.querys(iv)
-                parser = get_parser(fh,args.analysis_type,arg_dic,
-                                not args.no_skip_multiple_entries,progress_report_interval=args.progress_report_interval)
-                if parser.parse_fun is not None:
-                    parser.parse()
-                else:
-                    logging.warning("No parse function supplied. There is no point in specifying intervals.")
-            if parser.cleanup_fun is not None:
-                parser.cleanup()
-        else:
-             parser = get_parser(args.variant,args.analysis_type,arg_dic,
-                                not args.no_skip_multiple_entries,progress_report_interval=args.progress_report_interval)
+        parser = get_parser(args.variant,analyses[args.analysis_type],
+                             arg_dic=arg_dic, intervals = args.intervals,
+                             ncpus=args.ncpus,
+                                skip_multiple_entries=not args.no_skip_multiple_entries,
+                                progress_report_interval=args.progress_report_interval)
+        parser.run()
 
     else:
         logging.warning("No analysis specified. Run with flag -h for options.")
