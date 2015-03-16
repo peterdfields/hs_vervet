@@ -12,11 +12,11 @@ import pandas as pd
 import subprocess
 import multiprocessing as mp
 logger = logging.getLogger()
-#logging.basicConfig(format='%(levelname)-8s %(asctime)s  %(message)s')
-logging.basicConfig(format='%(levelname)-8s %(asctime)s %(funcName)20s()  %(message)s')
+logging.basicConfig(format='%(levelname)-8s %(asctime)s  %(message)s')
+#logging.basicConfig(format='%(levelname)-8s %(asctime)s %(funcName)20s()  %(message)s')
 logger.setLevel(logging.DEBUG)
-
 eu = os.path.expanduser
+jn = os.path.join
 try:
     import tabix
 except ImportError:
@@ -65,7 +65,8 @@ class Parser(object):
     def __init__(self,in_fh, sep='\t',parse_fun=None, header_fun=None,
                                setup_fun=None, cleanup_fun=None,
                                 output_fun = None,
-                                arg_dic=None,
+                                arg_dic=None,id='',
+                                line_write_vars = None,
                                     skip_multiple_entries=True,
                                     progress_report_interval=50000,**kwa):
         self.in_fh = in_fh
@@ -75,6 +76,10 @@ class Parser(object):
         self.setup_fun = setup_fun
         self.cleanup_fun = cleanup_fun
         self.output_fun = output_fun
+        if line_write_vars is None:
+            line_write_vars = []
+        self.line_write_vars = line_write_vars
+        self.id = id
         if arg_dic is None:
             arg_dic = {}
         self.arg_dic = arg_dic
@@ -95,6 +100,7 @@ class Parser(object):
     def setup(self):
         if self.setup_fun is not None:
             logging.info("Starting setup.")
+            print "setting up parser {}:".format(self.id), self.arg_dic
             self.setup_fun(self.arg_dic)
 
 
@@ -106,13 +112,15 @@ class Parser(object):
                     self.header_fun(line,self.arg_dic)
             else:
                 break
+        for v in self.line_write_vars:
+            self.arg_dic[v+'_fh'].flush()
 
 
     def parse(self,fh):
         """
         """
         if self.parse_fun is not None:
-            logging.info("Parsing vcf body of {}.".format(fh))
+            logging.info("{} Parsing vcf body of {}.".format(self.id,fh))
             prev_chrom = None
             prev_pos = -1
             multiple_count = 0
@@ -142,8 +150,9 @@ class Parser(object):
                 prev_chrom = chrom
                 prev_pos = pos
                 if i % self.progress_report_interval == 0:
-                    logging.info("Parsed {} lines: {} - {}".format(i,chrom,pos))
-            logging.info("Finished: {} lines at {} {}".format(i,chrom,pos))
+                    logging.info("{} Parsed {} lines: {} - {}".format(self.id,i,chrom,pos))
+            #print "parse args", self.arg_dic
+            logging.info("{} Finished: {} lines at {} {}".format(self.id,i,chrom,pos))
 
     def cleanup(self):
         """
@@ -151,6 +160,8 @@ class Parser(object):
         if self.cleanup_fun is not None:
             logging.info("Starting cleanup.")
             self.cleanup_fun(self.arg_dic)
+        for v in self.line_write_vars:
+            self.arg_dic[v+'_fh'].close()
 
     def output(self):
         if self.output_fun is not None:
@@ -223,20 +234,22 @@ class SerialParser(Parser):
 
     def run_no_output(self):
         self.setup()
+        #print 'after s', self.arg_dic['out_tsv_fh']
         self.parse_header()
+        #print 'after h', self.arg_dic['out_tsv_fh']
         if self.parse_fun is not None:
             for interval in self.intervals:
                 fh = self._query_tabix(interval)
                 self.parse(fh)
         else:
             logging.warning("No vcf body parse function supplied.")
+        #print 'after p', self.arg_dic['out_tsv_fh']
         self.cleanup()
-        logging.info("Run finished.")
 
     def run(self):
         self.run_no_output()
         self.output()
-
+        logging.info("Run finished.")
 
 #class ParallelParser(SerialParser):
 #    """
@@ -304,13 +317,12 @@ class SerialParser(Parser):
 
 class MultiRegionParallelParser(SerialParser):
     def __init__(self, in_fh, intervals, reduce_fun = None,
-                            ncpus='auto',
-                            line_write_vars=None, tmp_dir='.',**kwa):
+                            ncpus='auto', tmp_dir='.',**kwa):
         super(MultiRegionParallelParser, self).__init__(in_fh,intervals,**kwa)
         self.reduce_fun = reduce_fun
-        if line_write_vars is None:
-            line_write_vars = []
-        self.line_write_vars = line_write_vars
+        if 'line_write_vars' not in kwa:
+            kwa['line_write_vars'] = []
+        self.line_write_vars = kwa['line_write_vars']
         arg_dic = kwa['arg_dic']
         del kwa['arg_dic']
         kwa['header_fun'] = None
@@ -322,19 +334,20 @@ class MultiRegionParallelParser(SerialParser):
                      "Using {} processes.".format(len(intervals),self.ncpus))
         self.tmp_dir = tmp_dir
 
-
     def setup_parsers(self):
         parsers = []
         temp_files = []
-        for interval in self.intervals:
+        for i,interval in enumerate(self.intervals):
             p_arg_dic = self.arg_dic.copy()
             for var in self.line_write_vars:
                 tmp_fn = jn(self.tmp_dir,var+str(uuid.uuid4()) + \
-                                        "_" + str(intv[1]) + ".tmp")
+                                        "_" + str(i) + ".tmp")
                 p_arg_dic[var] = tmp_fn
                 temp_files.append(tmp_fn)
             parsers.append(SerialParser(self.in_fh, [interval],
-                                        arg_dic=p_arg_dic, **self.parsers_kwa))
+                                        arg_dic=p_arg_dic, id="Interval {}:".format(interval), **self.parsers_kwa))
+        #for p in parsers:
+        #    print p.arg_dic
             #print 'done'
             #sys.exit(0)
         self.parsers = parsers
@@ -343,29 +356,33 @@ class MultiRegionParallelParser(SerialParser):
     def reduce(self):
         if self.reduce_fun is not None:
             logging.info("Starting reduce step.")
-            self.reduce_fun([p.arg_dic for p in self.parsers])
+            self.reduce_fun(self.arg_dic,[ad for ad in self.out_arg_dics])
         else:
             logging.warning("No reduce function given. Won't do anything.")
+
+    def del_temp_files(self):
+        logging.info("Removing temp files.")
+        while self.temp_files:
+            os.remove(self.temp_files.pop())
+
+    def run_parser(self,i):
+        self.parsers[i].run_no_output()
+        return self.parsers[i].arg_dic
 
     def run(self):
         self.setup()
         self.parse_header()
         self.setup_parsers()
-        #self.parsers[0].run()
-        #import pdb
-        #pdb.set_trace()
-        #def r(parser):
-        #    parser.run_no_output()
-        pool = mp.Pool()   
-        pool.map(lambda x:x*2,range(10))
-        print pool
-        
-        #parmap(r,self.parsers,self.ncpus)
-        #self.reduce()
-        #self.output()
+        out_arg_dics = parmap(self.run_parser,range(len(self.parsers)))
+        self.out_arg_dics = out_arg_dics
+        logging.info("Reducing.")
+        self.reduce()
+        logging.info("Creating output.")
+        self.output()
+        self.del_temp_files()
+        logging.info("Run finished.")
 
-def r(parser):
-    parser.run_no_output()
+
 
 class SingleRegionParallelParser(MultiRegionParallelParser):
     def __init__(self, in_fh, intervals, ncpus='auto',
@@ -403,10 +420,10 @@ class SingleRegionParallelParser(MultiRegionParallelParser):
             logging.info("No chromosome end specified, searching for 'contig'"
                          "tag in vcf header.")
      #   make_intervals()
+        self.kwa = kwa
 
         super(ParallelSingleRegionParser, self).__init__(in_fh, intervals,ncpus, **kwa)
 
-    #def self.
 
     def parse_header_contig_len(self):
         logging.info("Parsing header.")
@@ -422,13 +439,18 @@ class SingleRegionParallelParser(MultiRegionParallelParser):
             else:
                 break
 
+    def make_intervals(self):
+        pass
+
+    def run(self):
+        pass
 
 #--------------------------------------------------------
 
 analyses = {}
 def add_analysis(name,funs,info='',always_req_params=None,
                     command_line_req_params=None,
-                    opt_params=None):
+                    opt_params=None,line_write_vars=None):
     """
     Add analysis to dict of analyses.
     Input:
@@ -440,7 +462,8 @@ def add_analysis(name,funs,info='',always_req_params=None,
                  command_line_req_params if command_line_req_params is not None else {},
                'always_req_params':\
                  always_req_params if always_req_params is not None else {},
-               'opt_params': opt_params if opt_params is not None else {}}
+               'opt_params': opt_params if opt_params is not None else {},
+               'line_write_vars':line_write_vars}
     analyses.update({name:entry})
 
 
@@ -458,6 +481,11 @@ def check_params(arg_dic,req_param_dic):
 def get_parser(vcf_fh,analysis,**kwa):
     check_params(kwa['arg_dic'],analysis['always_req_params'])
     kwa.update(analysis['funs'])
+    try:
+        kwa['line_write_vars'] = analysis['line_write_vars']
+    except KeyError:
+        logging.warning('Analysis has no key "line_write_vars". Assuming '
+                        'that there is no output written line by line.')
     if not 'intervals' in kwa or not kwa['intervals']:
         #if 'intervals' in kwa:
         #    del kwa['intervals']
@@ -471,11 +499,6 @@ def get_parser(vcf_fh,analysis,**kwa):
         assert 'reduce_fun' in analysis['funs'],("This analysis does not support "
                                                  "parallel execution, remove "
                                                  "--ncpus option.")
-        try:
-            kwa['line_write_vars'] = analysis['line_write_vars']
-        except KeyError:
-            logging.warning('Analysis has no key "line_write_vars". Assuming '
-                            'that there is no output written line by line.')
         if len(kwa['intervals']) == 1:
             logging.info("Initialising SingleRegionParallelParser.")
             parser = SingleRegionParallelParser(vcf_fh,**kwa)
@@ -489,6 +512,7 @@ def get_parser(vcf_fh,analysis,**kwa):
 
 #parallel support
 
+
 def fun(f,q_in,q_out):
     while True:
         i,x = q_in.get()
@@ -496,7 +520,7 @@ def fun(f,q_in,q_out):
             break
         q_out.put((i,f(x)))
 
-def parmap(f, X, nprocs):
+def parmap(f, X, nprocs = mp.cpu_count()):
     q_in   = mp.Queue(1)
     q_out  = mp.Queue()
 
@@ -522,7 +546,8 @@ def try_add_out_fh(arg_dic,key):
     try:
         arg_dic[key+'_fh'] = open(eu(arg_dic[key]),'w')
     except KeyError:
-        pass
+        logging.warning("Could add filehandle for {}, no file specified. ".format(key))
+        #pass
 
 #====support parsing=====
 
@@ -559,9 +584,9 @@ def sum_countdics(countdics):
     for countdic in countdics:
         for k,v in countdic.iteritems():
             try:
-                tot_countdic['k'] += v
+                tot_countdic[k] += v
             except KeyError:
-                tot_countdic['k'] = v
+                tot_countdic[k] = v
     return tot_countdic
 
 
@@ -585,18 +610,32 @@ def vcf_to_012_setup_fun(arg_dic):
 def vcf_to_012_header_fun(line, arg_dic):
     if line[1:6] == "CHROM":
         arg_dic['out_tsv_fh'].write("chrom\tpos\t"+line.split("\t",9)[-1])
+#        arg_dic['out_tsv_fh'].flush()
 
 def vcf_to_012_parse_fun(d, arg_dic):
     gt = map(get_012,d[9:])
     arg_dic['out_tsv_fh'].write("\t".join(d[:2])+"\t"+"\t".join(gt)+"\n")
 
+
+#def vcf_to_012_cleanup_fun(arg_dic):
+#    pass
+#    arg_dic['out_tsv_fh'].close()
+
+def vcf_to_012_reduce_fun(arg_dic,arg_dics):
+    command = ["cat"]+[ad['out_tsv'] for ad in arg_dics]
+    p = subprocess.Popen(command, stdout=arg_dic['out_tsv_fh'])
+    p.communicate()
+
 add_analysis('vcf_to_012',
              {'setup_fun':vcf_to_012_setup_fun,
               'parse_fun':vcf_to_012_parse_fun,
-              'header_fun':vcf_to_012_header_fun},
+              'header_fun':vcf_to_012_header_fun,
+ #             'cleanup_fun':vcf_to_012_cleanup_fun,
+              'reduce_fun':vcf_to_012_reduce_fun},
                 info,
                 always_req_params={'out_tsv':\
-                                        "File path to write output tsv to."})
+                                        "File path to write output tsv to."},
+                line_write_vars=['out_tsv'])
 
 
 
@@ -975,7 +1014,7 @@ def filter_missing_stats_parse_fun(line,arg_dic):
 def filter_missing_stats_reduce_fun(arg_dic,arg_dics):
     arg_dic['N_df'] = sum([d['N_df'] for d in arg_dics])
     arg_dic['sites_dic'] = sum_countdics([d['sites_dic'] for d in arg_dics])
-    arg_dic['Nxy'] = sum([d['N_xy'] for d in arg_dics])
+    arg_dic['Nxy'] = sum([d['Nxy'] for d in arg_dics])
 
 def filter_missing_stats_output_fun(arg_dic):
     N_df = arg_dic['N_df']
