@@ -992,6 +992,46 @@ add_analysis('filter_missing_stats',
                         "Tsv path to write cross individual correlations "
                                                 "of missing genotypes to."})
 
+
+#-----------create_indel_bed--------------
+
+info = \
+       "Creates a bed file with the intervals "
+       "of all indels in the input vcf."
+
+def create_indel_bed_setup_fun(arg_dic):
+    arg_dic["out_bed_fh"] = open(arg_dic["out_bed_fh"],'w')
+    if 'extend_interval' not in arg_dic:
+        arg_dic['extend_interval'] = 0
+    arg_dic['contig_dic'] = {}
+
+def create_indel_bed_header_fun(line, arg_dic):
+    if line[:9] == '##contig=':
+        c_dic = get_header_line_dic(line)
+        arg_dic['contig_dic'].update({c_dic['id']:int(c_dic['length'])})
+
+def create_indel_bed_parse_fun(line,arg_dic):
+    ref = line[3]
+    alt = line[4].split(',')
+    pos = line[1]
+    chrom = line[0]
+    if len(ref)>1 or [a for a in alt if len(a)>1]:
+        start = max(0, pos - 1 - args_dic['extend_interval'])
+        end = min(arg_dic['contig_dic'][chrom],start + len(ref) + arg_dic['extend_interval'])
+        arg_dic['out_bed_fh'].write("{}\t{}\t{}\n".format(record.CHROM,start,end))
+
+add_analysis("create_indel_bed",
+            {'setup_fun': create_indel_bed_setup_fun,
+            'header_fun': create_indel_bed_header_fun,
+            'parse_fun': create_indel_bed_parse_fun,
+            },
+            info,
+            always_req_params=\
+            {'out_bed':'Filepath of the output bed.'},
+            opt_params={'extend_interval':'Extend the interval by n bases '
+                                           'to left and right. Default 0.'},
+            line_write_vars=['out_bed'])
+
 if __name__ == "__main__":
     import gzip
     import argparse
