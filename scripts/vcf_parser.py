@@ -90,12 +90,66 @@ class Parser(object):
         self.skip_multiple_entries = skip_multiple_entries
         self.progress_report_interval = progress_report_interval
         self.finished = False
+        self.i = 0
+        self.prev_chrom = None
+        self.prev_pos = -1
+        self.multiple_count = 0
+        self.print_warning = True
+
  
+    def _split_line(self,line):
+        return line.strip().split(self.sep)
 
-    def _split_line(self,fh):
+    def _yield_split_line(self,fh):
         while True:
-            yield fh.next().strip().split(self.sep)
+            line = self._split_line(fh.next())
+            self._report_progress()
+            while self._skip_duplicate_line(line) or self._skip_comment(line):
+                line = self._split_line(fh.next())
+                self.report_progress()
+            yield line
 
+
+
+    def _header_line_parser(self,line):
+        if self.header_fun is not None:
+            self.header_fun(line,self.arg_dic)
+
+
+    def _skip_duplicate_line(self,line):
+        chrom = line[0]
+        pos = int(line[1])
+        if chrom == self.prev_chrom:
+            assert pos >= self.prev_pos, "vcf positions not in "\
+                                            "ascending order at: {}:{},{}".format(chrom,prev_pos,pos)
+            if pos == self.prev_pos:
+                self.multiple_count += 1
+                if self.multiple_count > 100 and print_warning:
+                    logging.warning("Omitting further multiple entry warnings.")
+                    self.print_warning = False
+                elif self.print_warning:
+                    if not self.skip_multiple_entries:
+                        logging.warning("Multiple entries for pos {}:{}.\n"
+                                  "Keeping all entries.".format(chrom,pos))
+                        return False
+                    else:
+                        logging.warning("Warning, multiple entries for pos {}:{}.\n"
+                              "Skipping all but the first.".format(chrom,pos))
+                        return True
+        self.prev_chrom = chrom
+        self.prev_pos = pos
+        return False
+
+    def _report_progress(self):
+        if self.i % self.progress_report_interval == 0:
+            logging.info("{} Parsed {} lines: {} - {}".format(self.id,self.i,self.prev_chrom,self.prev_pos))
+
+    def _skip_comment(self,line):
+        if line[0][0] == "#":
+            logging.warning("Skipping comment line in vcf: {}".format(line))
+            return True
+        else:
+            return False
 
     def setup(self):
         if self.setup_fun is not None:
@@ -113,49 +167,17 @@ class Parser(object):
         for v in self.line_write_vars:
             self.arg_dic[v+'_fh'].flush()
 
-    def _header_line_parser(self,line):
-        if self.header_fun is not None:
-            self.header_fun(line,self.arg_dic)
-
-
     def parse(self,fh):
         """
         """
         if self.parse_fun is not None:
             logging.info("{} Parsing vcf body of {}.".format(self.id,fh))
-            prev_chrom = None
-            prev_pos = -1
-            multiple_count = 0
-            line_it = self._split_line(fh)
-            print_warning = True
-            for i,d in enumerate(line_it):
-                if d[0][0] == "#":
-                    logging.warning("Skipping comment line in vcf: {}".format(line))
-                    continue
-                chrom = d[0]
-                pos = int(d[1])
-                if chrom == prev_chrom:
-                    assert pos >= prev_pos, "vcf positions not in "\
-                                            "ascending order at: {}:{},{}".format(chrom,prev_pos,pos)
-                    if pos == prev_pos:
-                        multiple_count += 1
-                        if multiple_count > 100 and print_warning:
-                            logging.warning("Omitting further multiple entry warnings.")
-                            print_warning = False
-                        elif print_warning:
-                            if not self.skip_multiple_entries:
-                                logging.warning("Multiple entries for pos {}:{}.\n"
-                                          "Keeping all entries.".format(chrom,pos))
-                            else:
-                                logging.warning("Warning, multiple entries for pos {}:{}.\n"
-                                      "Skipping all but the first.".format(chrom,pos))
-                                continue
+            line_it = self._yield_split_line(fh)
+            for d in line_it:
                 self.parse_fun(d,self.arg_dic)
-                prev_chrom = chrom
-                prev_pos = pos
-                if i % self.progress_report_interval == 0:
-                    logging.info("{} Parsed {} lines: {} - {}".format(self.id,i,chrom,pos))
-            logging.info("{} Finished: {} lines at {} {}".format(self.id,i,chrom,pos))
+            #not perfect implementation, prev_pos is not necessarily updated 
+            #in children if _skip_duplicate_line is overidden
+            logging.info("{} Finished: {} lines at {} {}".format(self.id,self.i,self.prev_chrom,self.prev_pos))
 
     def cleanup(self):
         """
@@ -227,13 +249,16 @@ class SerialParser(Parser):
                                                " e.g. ('Chr1',1000000,1005000). "
                                 "Alternatively use string 'Chr:1000000-1005000'")
                 raise e
+#    def _split_line(self,fh):
+#        """
+#        The line in the tabix iterator is already split.
+#        """
+#        while True:
+#            yield fh.next()
 
-    def _split_line(self,fh):
-        """
-        The line in the tabix iterator is already split.
-        """
-        while True:
-            yield fh.next()
+
+    def _split_line(self,line):
+        return line
 
 
 
@@ -241,7 +266,8 @@ class SerialParser(Parser):
         self.setup()
         self.parse_header()
         if self.parse_fun is not None:
-            for interval in self.intervals:
+    
+        for interval in self.intervals:
                 fh = self._query_tabix(interval)
                 self.parse(fh)
         else:
@@ -253,6 +279,34 @@ class SerialParser(Parser):
         self.output()
         logging.info("Run finished.")
 
+class MultiInputSerialParser(SerialParser):
+    """
+    Parse multiple vcf_files with corresponding lines.
+    """
+    import itertools
+    def __init__(self,in_fhs,intervals, **kwa):
+        #this is a bit sloppy, the further in_fhs are not tested whether
+        #they can be queried with tabix
+        super(MultiInputSerialParser, self).__init__(in_fhs[0],intervals,**kwa)
+        self.in_fh = in_fhs
+
+
+        def _yield_split_line(self,fhs):
+        """
+        The line in the tabix iterator is already split.
+        """
+        nxt = lambda fh: super(MultiInputSerialParser, self)._yield_split_line(fh)
+        while True:
+            lines = [nxt(fh) for fh in fhs]
+            #lines = [fhi.next() for fhi in fh]
+            poss = [int(l[1]) for l in lines]
+            assert len(set(l[0] for l in lines])) <= 1, ("Unequal chromosomes in "
+                                                "MultiInSerialParser not implemented.")
+            while max(poss)>min(poss):
+                lines = [lines[i] for i in range(len(lines)) \
+                            if poss[i]==max(poss) else nxt(fhs[i])]
+                poss = [int(l[1]) for l in lines]
+            yield tuple(lines)
 
 class MultiRegionParallelParser(SerialParser):
     def __init__(self, in_fh, intervals,
