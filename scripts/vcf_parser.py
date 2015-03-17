@@ -98,6 +98,7 @@ class Parser(object):
 
  
     def _split_line(self,line):
+        self.i += 1
         return line.strip().split(self.sep)
 
     def _yield_split_line(self,fh):
@@ -106,7 +107,7 @@ class Parser(object):
             self._report_progress()
             while self._skip_duplicate_line(line) or self._skip_comment(line):
                 line = self._split_line(fh.next())
-                self.report_progress()
+                self._report_progress()
             yield line
 
 
@@ -266,8 +267,7 @@ class SerialParser(Parser):
         self.setup()
         self.parse_header()
         if self.parse_fun is not None:
-    
-        for interval in self.intervals:
+            for interval in self.intervals:
                 fh = self._query_tabix(interval)
                 self.parse(fh)
         else:
@@ -291,7 +291,7 @@ class MultiInputSerialParser(SerialParser):
         self.in_fh = in_fhs
 
 
-        def _yield_split_line(self,fhs):
+    def _yield_split_line(self,fhs):
         """
         The line in the tabix iterator is already split.
         """
@@ -300,11 +300,10 @@ class MultiInputSerialParser(SerialParser):
             lines = [nxt(fh) for fh in fhs]
             #lines = [fhi.next() for fhi in fh]
             poss = [int(l[1]) for l in lines]
-            assert len(set(l[0] for l in lines])) <= 1, ("Unequal chromosomes in "
+            assert len(set([l[0] for l in lines])) <= 1, ("Unequal chromosomes in "
                                                 "MultiInSerialParser not implemented.")
             while max(poss)>min(poss):
-                lines = [lines[i] for i in range(len(lines)) \
-                            if poss[i]==max(poss) else nxt(fhs[i])]
+                lines = [lines[i]  if poss[i]==max(poss) else nxt(fhs[i]) for i in range(len(lines))]
                 poss = [int(l[1]) for l in lines]
             yield tuple(lines)
 
@@ -1077,6 +1076,7 @@ def create_indel_bed_parse_fun(line,arg_dic):
         end = min(arg_dic['contig_dic'][chrom],start + len(ref) + arg_dic['extend_interval'])
         arg_dic['out_bed_fh'].write("{}\t{}\t{}\n".format(chrom,start,end))
 
+
 add_analysis("create_indel_bed",
             {'setup_fun': create_indel_bed_setup_fun,
             'header_fun': create_indel_bed_header_fun,
@@ -1088,6 +1088,62 @@ add_analysis("create_indel_bed",
             opt_params={'extend_interval':'Extend the interval by n bases '
                                            'to left and right. Default 0.'},
             line_write_vars=['out_bed'])
+
+
+#info = ("Filter vcf for intervals bed file. "
+#        "This parser is experimental, only working for special cases.")
+#
+#def filter_vcf_by_bed_setup_fun(arg_dic):
+#    arg_dic['in_bed_fh'] = open(arg_dic['in_bed'])
+#    arg_dic['out_vcf_fh'] = open(arg_dic['out_vcf'])
+#
+#def filter_vcf_by_bed_parse_fun(vcf_line,bed_line,arg_dic):
+#....
+#
+#add_analysis("create_indel_bed",
+#            {'setup_fun': create_indel_bed_setup_fun,
+#            'header_fun': create_indel_bed_header_fun,
+#            'parse_fun': create_indel_bed_parse_fun,
+#            },
+#            info,
+#            always_req_params=\
+#            {'in_bed':'Filepath of the input bed.',
+#             'overwrite':'Overwrite all other filters '
+#                        'and mark sites as PASS if not '
+#                       'covered by the filter. Default False.',
+#             'out_vcf':'Filepath to output vcf.'},
+#            line_write_vars=['out_vcf'])
+
+
+#------------samtools_to_gatk-------------
+
+
+info = ("Samtools to GATK format")
+
+
+def samtools_to_gatk_setup_fun(arg_dic):
+    arg_dic['out_vcf_fh'] = open(arg_dic['out_vcf'],'w')
+
+def samtools_to_gatk_parse_fun(line,arg_dic):
+    alt = line[4].split(',')
+    alt = [a for a in alt if a != 'X']
+    if not alt:
+        alt = ['.']
+    line[4] = ",".join(alt)
+    arg_dic['out_vcf_fh'].write("\t".join(line)+'\n')
+
+
+add_analysis("samtools_to_gatk",
+            {'setup_fun':  samtools_to_gatk_setup_fun,
+            'parse_fun':  samtools_to_gatk_parse_fun,
+            },
+            info,
+            always_req_params=\
+            {'out_vcf':'Filepath to output vcf.'},
+            line_write_vars=['out_vcf'])
+
+
+
 
 if __name__ == "__main__":
     import gzip
