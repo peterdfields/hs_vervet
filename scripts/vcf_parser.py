@@ -83,9 +83,9 @@ class Parser(object):
         if arg_dic is None:
             arg_dic = {}
         self.arg_dic = arg_dic
-        if 'in_fh' in self.arg_dic:
-            logging.warning("Key 'in_fh' of arg_dic already in use. "
-                                                     "Overwrite!")
+        #if 'in_fh' in self.arg_dic:
+        #    logging.warning("Key 'in_fh' of arg_dic already in use. "
+        #                                             "Overwrite!")
         self.arg_dic['in_fh'] = in_fh
         self.skip_multiple_entries = skip_multiple_entries
         self.progress_report_interval = progress_report_interval
@@ -100,7 +100,6 @@ class Parser(object):
     def setup(self):
         if self.setup_fun is not None:
             logging.info("Starting setup.")
-            print "setting up parser {}:".format(self.id), self.arg_dic
             self.setup_fun(self.arg_dic)
 
 
@@ -108,12 +107,15 @@ class Parser(object):
         logging.info("Parsing header.")
         for line in self.in_fh:
             if line[0] == '#':
-                if self.header_fun is not None:
-                    self.header_fun(line,self.arg_dic)
+                self._header_line_parser(line)
             else:
                 break
         for v in self.line_write_vars:
             self.arg_dic[v+'_fh'].flush()
+
+    def _header_line_parser(self,line):
+        if self.header_fun is not None:
+            self.header_fun(line,self.arg_dic)
 
 
     def parse(self,fh):
@@ -151,7 +153,6 @@ class Parser(object):
                 prev_pos = pos
                 if i % self.progress_report_interval == 0:
                     logging.info("{} Parsed {} lines: {} - {}".format(self.id,i,chrom,pos))
-            #print "parse args", self.arg_dic
             logging.info("{} Finished: {} lines at {} {}".format(self.id,i,chrom,pos))
 
     def cleanup(self):
@@ -198,6 +199,9 @@ class SerialParser(Parser):
     def __init__(self,in_fh,intervals,auto_tabix=False, **kwa):
         super(SerialParser, self).__init__(in_fh,**kwa)
         self.intervals = intervals
+        #if 'line_write_vars' not in kwa or kwa['line_write_vars'] is None:
+        #    kwa['line_write_vars'] = []
+        #self.line_wire_vars = kwa['line_write_vars']
         self.tabix_fh = tabix.open(in_fh.name)
         try:
             self._query_tabix(intervals[0])
@@ -221,7 +225,6 @@ class SerialParser(Parser):
                                                " e.g. ('Chr1',1000000,1005000). "
                                 "Alternatively use string 'Chr:1000000-1005000'")
                 raise e
-        
 
     def _split_line(self,fh):
         """
@@ -234,16 +237,13 @@ class SerialParser(Parser):
 
     def run_no_output(self):
         self.setup()
-        #print 'after s', self.arg_dic['out_tsv_fh']
         self.parse_header()
-        #print 'after h', self.arg_dic['out_tsv_fh']
         if self.parse_fun is not None:
             for interval in self.intervals:
                 fh = self._query_tabix(interval)
                 self.parse(fh)
         else:
             logging.warning("No vcf body parse function supplied.")
-        #print 'after p', self.arg_dic['out_tsv_fh']
         self.cleanup()
 
     def run(self):
@@ -251,88 +251,25 @@ class SerialParser(Parser):
         self.output()
         logging.info("Run finished.")
 
-#class ParallelParser(SerialParser):
-#    """
-#    Implements a split-apply-reduce framework
-#    for parallel parsing on multiple cpus.
-#
-#    make two different classes !!!
-#    2 Modes:
-#    Parallel single region.
-#    Parallel by region.
-#    """
-#    def __init__(self, in_fh, intervals, ncpus, **kwa):
-#        super(ParallelParser, self).__init__(in_fh, intervals, **kwa)
-#        if len(intervals) == 1:
-#            self.ncpus = ncpus
-#            logging.info("One interval specified, entering single_region_parallel mode with {} cores.".format(ncpus))
-#            self.mode = 'single_region_parallel'
-#            region = intervals[0]
-#            try:
-#                self.tabix_fh.querys(region)
-#                chrompos = region.split(":")
-#                chrom = chrompos[0]
-#                try:
-#                    startend = chrompos[1].split('-')
-#                    start = int(startend[0])
-#                    try:
-#                        end = int(startend[1])
-#                    except:
-#                        end = None
-#                except IndexError:
-#                    start = None
-#                    end = None
-#            except TypeError:
-#                chrom = region[0]
-#                start = region[1]
-#                end = region[2]
-#            self.chrom = chrom
-#            self.start = start
-#            self.end = end
-#            if self.start is None:
-#                self.start = 0
-#            if self.end is None:
-#                self.parse_header = self.parse_header_contig_len
-#        else:
-#            self.ncpus = min(len(intervals),ncpus)
-#            logging.info("{} intervals specified, entering parallel_by_region "
-#                                        "mode, using {} cores.".format(self.ncpus)
-#            self.mode = 'parallel_by_region'
-#
-#
-#    def parse_header_contig_len(self):
-#        logging.info("Parsing header.")
-#        for line in self.in_fh:
-#            if line[0] == '#':
-#                if line[:9] == '##contig=':
-#                    contig_dic = get_header_line_dic(line)
-#                    if contig_dic['ID'] == chrom:
-#                        length = int(contig_dic['length'])
-#                        self.end = length
-#                if self.header_fun is not None:
-#                    self.header_fun(line,self.arg_dic)
-#            else:
-#                break
-#    #def parse_vcf(self,header_fun):
 
 class MultiRegionParallelParser(SerialParser):
-    def __init__(self, in_fh, intervals, reduce_fun = None,
+    def __init__(self, in_fh, intervals,
                             ncpus='auto', tmp_dir='.',**kwa):
         super(MultiRegionParallelParser, self).__init__(in_fh,intervals,**kwa)
-        self.reduce_fun = reduce_fun
-        if 'line_write_vars' not in kwa:
-            kwa['line_write_vars'] = []
-        self.line_write_vars = kwa['line_write_vars']
+        self.reduce_fun = kwa['reduce_fun']
         arg_dic = kwa['arg_dic']
         del kwa['arg_dic']
         kwa['header_fun'] = None
         self.parsers_kwa = kwa
         if ncpus == 'auto':
             ncpus = mp.cpu_count()
-        self.ncpus = min(len(intervals),ncpus)
-        logging.info("{} regions specified.  Parallelising by region. "
-                     "Using {} processes.".format(len(intervals),self.ncpus))
+        self.ncpus = ncpus
         self.tmp_dir = tmp_dir
+
+    def set_ncpus(self):
+        self.ncpus = min(len(self.intervals),self.ncpus)
+        logging.info("{} regions specified.  Parallelising by region. "
+                     "Using {} processes.".format(len(self.intervals),self.ncpus))
 
     def setup_parsers(self):
         parsers = []
@@ -346,10 +283,6 @@ class MultiRegionParallelParser(SerialParser):
                 temp_files.append(tmp_fn)
             parsers.append(SerialParser(self.in_fh, [interval],
                                         arg_dic=p_arg_dic, id="Interval {}:".format(interval), **self.parsers_kwa))
-        #for p in parsers:
-        #    print p.arg_dic
-            #print 'done'
-            #sys.exit(0)
         self.parsers = parsers
         self.temp_files = temp_files
 
@@ -372,6 +305,7 @@ class MultiRegionParallelParser(SerialParser):
     def run(self):
         self.setup()
         self.parse_header()
+        self.set_ncpus()
         self.setup_parsers()
         out_arg_dics = parmap(self.run_parser,range(len(self.parsers)))
         self.out_arg_dics = out_arg_dics
@@ -385,15 +319,15 @@ class MultiRegionParallelParser(SerialParser):
 
 
 class SingleRegionParallelParser(MultiRegionParallelParser):
-    def __init__(self, in_fh, intervals, ncpus='auto',
-                            line_write_vars=None, **kwa):
+    def __init__(self, in_fh, intervals, **kwa):
         assert len(intervals) == 1, ("ParallelSingleRegionParser requires a "
                                                            "single interval.")
-        self.ncpus = ncpus
         #logging.info("One interval specified, starting single_region_parallel mode with {} cores.".format(ncpus))
+        super(SingleRegionParallelParser, self).__init__(in_fh, intervals, **kwa)
+        self.in_fh = in_fh
         region = intervals[0]
         try:
-            self.tabix_fh.querys(region)
+            #self.tabix_fh.querys(region)
             chrompos = region.split(":")
             chrom = chrompos[0]
             try:
@@ -416,34 +350,51 @@ class SingleRegionParallelParser(MultiRegionParallelParser):
         if self.start is None:
             self.start = 0
         if self.end is None:
-            self.parse_header = self.parse_header_contig_len
+            self._header_line_parser = self._header_line_parser_search_contig_len
             logging.info("No chromosome end specified, searching for 'contig'"
                          "tag in vcf header.")
-     #   make_intervals()
         self.kwa = kwa
 
-        super(ParallelSingleRegionParser, self).__init__(in_fh, intervals,ncpus, **kwa)
 
+    def parse_header(self):
+        super(SingleRegionParallelParser, self).parse_header()
+        self.intervals = self.get_intervals()
 
-    def parse_header_contig_len(self):
-        logging.info("Parsing header.")
-        for line in self.in_fh:
-            if line[0] == '#':
-                if line[:9] == '##contig=':
+#    def parse_header_contig_len(self):
+#        logging.info("Parsing header.")
+#        for line in self.in_fh:
+#            if line[0] == '#':
+#                if line[:9] == '##contig=':
+#                    contig_dic = get_header_line_dic(line)
+#                    if contig_dic['ID'] == self.chrom:
+#                        length = int(contig_dic['length'])
+#                        self.end = length
+#                if self.header_fun is not None:
+#                    self.header_fun(line,self.arg_dic)
+#            else:
+#                break
+
+        self.intervals = self.get_intervals()
+
+    def _header_line_parser_search_contig_len(self,line):
+        if line[:9] == '##contig=':
                     contig_dic = get_header_line_dic(line)
-                    if contig_dic['ID'] == chrom:
+                    if contig_dic['ID'] == self.chrom:
                         length = int(contig_dic['length'])
                         self.end = length
-                if self.header_fun is not None:
-                    self.header_fun(line,self.arg_dic)
-            else:
-                break
+        if self.header_fun is not None:
+            self.header_fun(line,self.arg_dic)
 
-    def make_intervals(self):
-        pass
+    def get_intervals(self):
+        n_chunks = self.ncpus
+        chunksize = int((self.end-self.start)/n_chunks) + 1
+        starts = []
+        for s in range(self.start,self.end,chunksize):
+            starts.append(s)
+        intervals = [(self.chrom,s,e) for s,e in zip(starts,[s-1 for s in starts[1:]]+[self.end])]
+        return intervals
 
-    def run(self):
-        pass
+
 
 #--------------------------------------------------------
 
@@ -552,7 +503,7 @@ def try_add_out_fh(arg_dic,key):
 #====support parsing=====
 
 def get_header_line_dic(line):
-    dic = {k:v for t in line.strip().split('=<')[1][:-1].split(',') for k,v in t.split("=")}
+    dic = {k:v for k,v in [t.split('=') for t  in line.strip().split('=<')[1][:-1].split(',')]}
     return dic
 
 
@@ -610,16 +561,12 @@ def vcf_to_012_setup_fun(arg_dic):
 def vcf_to_012_header_fun(line, arg_dic):
     if line[1:6] == "CHROM":
         arg_dic['out_tsv_fh'].write("chrom\tpos\t"+line.split("\t",9)[-1])
-#        arg_dic['out_tsv_fh'].flush()
 
 def vcf_to_012_parse_fun(d, arg_dic):
     gt = map(get_012,d[9:])
     arg_dic['out_tsv_fh'].write("\t".join(d[:2])+"\t"+"\t".join(gt)+"\n")
 
 
-#def vcf_to_012_cleanup_fun(arg_dic):
-#    pass
-#    arg_dic['out_tsv_fh'].close()
 
 def vcf_to_012_reduce_fun(arg_dic,arg_dics):
     command = ["cat"]+[ad['out_tsv'] for ad in arg_dics]
@@ -630,7 +577,6 @@ add_analysis('vcf_to_012',
              {'setup_fun':vcf_to_012_setup_fun,
               'parse_fun':vcf_to_012_parse_fun,
               'header_fun':vcf_to_012_header_fun,
- #             'cleanup_fun':vcf_to_012_cleanup_fun,
               'reduce_fun':vcf_to_012_reduce_fun},
                 info,
                 always_req_params={'out_tsv':\
@@ -1050,6 +996,7 @@ if __name__ == "__main__":
     import gzip
     import argparse
     import select
+    import time
     #def get_interval(interval_string):
         #"""
         #Parse Chr3:600-34000 into tuple.
@@ -1180,7 +1127,11 @@ if __name__ == "__main__":
                              ncpus=args.ncpus,
                                 skip_multiple_entries=not args.no_skip_multiple_entries,
                                 progress_report_interval=args.progress_report_interval)
+        start = time.time()
         parser.run()
+        end = time.time()
+        delta = end - start
+        logging.info("This run took {} seconds = {} minutes = {} hours.".format(delta,delta/60.,delta/3600.))
 
     else:
         logging.warning("No analysis specified. Run with flag -h for options.")
