@@ -127,6 +127,7 @@ class Parser(object):
             prev_pos = -1
             multiple_count = 0
             line_it = self._split_line(fh)
+            print_warning = True
             for i,d in enumerate(line_it):
                 if d[0][0] == "#":
                     logging.warning("Skipping comment line in vcf: {}".format(line))
@@ -138,10 +139,11 @@ class Parser(object):
                                             "ascending order at: {}:{},{}".format(chrom,prev_pos,pos)
                     if pos == prev_pos:
                         multiple_count += 1
-                        if mutiple_count > 100:
+                        if multiple_count > 100 and print_warning:
                             logging.warning("Omitting further multiple entry warnings.")
-                        else:
-                            if not skip_multiple_entries:
+                            print_warning = False
+                        elif print_warning:
+                            if not self.skip_multiple_entries:
                                 logging.warning("Multiple entries for pos {}:{}.\n"
                                           "Keeping all entries.".format(chrom,pos))
                             else:
@@ -995,30 +997,31 @@ add_analysis('filter_missing_stats',
 
 #-----------create_indel_bed--------------
 
-info = \
-       "Creates a bed file with the intervals "
-       "of all indels in the input vcf."
+info = ("Creates a bed file with the intervals "
+       "of all indels in the input vcf.")
 
 def create_indel_bed_setup_fun(arg_dic):
-    arg_dic["out_bed_fh"] = open(arg_dic["out_bed_fh"],'w')
+    arg_dic["out_bed_fh"] = open(arg_dic["out_bed"],'w')
     if 'extend_interval' not in arg_dic:
         arg_dic['extend_interval'] = 0
+    else:
+        arg_dic['extend_interval'] = int(arg_dic['extend_interval'])
     arg_dic['contig_dic'] = {}
 
 def create_indel_bed_header_fun(line, arg_dic):
     if line[:9] == '##contig=':
         c_dic = get_header_line_dic(line)
-        arg_dic['contig_dic'].update({c_dic['id']:int(c_dic['length'])})
+        arg_dic['contig_dic'].update({c_dic['ID']:int(c_dic['length'])})
 
 def create_indel_bed_parse_fun(line,arg_dic):
     ref = line[3]
     alt = line[4].split(',')
-    pos = line[1]
+    pos = int(line[1])
     chrom = line[0]
     if len(ref)>1 or [a for a in alt if len(a)>1]:
-        start = max(0, pos - 1 - args_dic['extend_interval'])
+        start = max(0, pos - 1 - arg_dic['extend_interval'])
         end = min(arg_dic['contig_dic'][chrom],start + len(ref) + arg_dic['extend_interval'])
-        arg_dic['out_bed_fh'].write("{}\t{}\t{}\n".format(record.CHROM,start,end))
+        arg_dic['out_bed_fh'].write("{}\t{}\t{}\n".format(chrom,start,end))
 
 add_analysis("create_indel_bed",
             {'setup_fun': create_indel_bed_setup_fun,
@@ -1118,7 +1121,7 @@ if __name__ == "__main__":
         if extension == '.gz':
             args.variant = gzip.open(args.variant.name)
         else:
-            assert not intervals,("Interval mode (-L) only supported on bgzipped "
+            assert not args.intervals,("Interval mode (-L) only supported on bgzipped "
                                  "files with tabix index. But input has not ending .gz")
             if  extension != '.vcf':
                 logging.warning("Unrecognized file extension. "
