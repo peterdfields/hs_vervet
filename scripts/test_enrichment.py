@@ -5,6 +5,8 @@ TODO:
 -it would save disk space if we do not add go categories with 0 genes
 to all assoc_tables, but only add them in the end. (I think the most recent version supports
 this, try it...)
+-Package functions so that we can run enrichment on candidate gene list directly (without a rod_s).
+-Package into classes?
 """
 from __future__ import print_function 
 import os
@@ -139,6 +141,9 @@ def multiple_permut_assoc(rod_s, gene_df, gene_to_go, top_n, max_dist, n_runs, a
     return assoc_table
 
 def multiple_permut_assoc_low_mem(rod_s, init_rank_table, gene_df, gene_to_go, top_n, max_dist, n_runs, ascending, rnd_seed=None):
+    """
+    todo: Document!!!
+    """
     if rnd_seed is not None:
         np.random.seed(rnd_seed)
     if not rod_s.index.is_monotonic:
@@ -255,6 +260,10 @@ def get_p_val(rank_table):
     return r
 
 def update_rank(rank_table,assoc_table):
+    """
+    UNUSED, remove????
+    todo: describe what assoc_table is, isn't this a series?
+    """
     r = assoc_table.apply(lambda row: get_rank(row,rank_table),axis=1)
     r.index.name = "category"
     return r
@@ -262,6 +271,9 @@ def update_rank(rank_table,assoc_table):
 
 
 def total_rank(rank_table, permut_fns):
+    """
+    Unused, remove?????
+    """
     rt = rank_table.copy()
     for f in permut_fns:
         rt = update_rank(rt,f)
