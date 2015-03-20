@@ -3,7 +3,12 @@
 Different functions to parse a  VCF.
 See argparse help.
 Todo:
--- parallel
+-- call parser classer walkers
+-- package parse functions in parser classes
+-- handle multiple input within argdic 
+-- the current line should be stored in arg_dic
+-- and the next() method should be called withn the parse function
+ (or _yield generator for each addidional input in the future parser class)
 """
 import sys, os, json, uuid
 import logging
