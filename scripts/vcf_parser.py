@@ -4,6 +4,8 @@ Different functions to parse a  VCF.
 See argparse help.
 Todo:
 -- parallel
+Make class to package parse funs:
+arg_dic --> self
 """
 import sys, os, json, uuid
 import logging
@@ -279,33 +281,33 @@ class SerialParser(Parser):
         self.output()
         logging.info("Run finished.")
 
-class MultiInputSerialParser(SerialParser):
-    """
-    Parse multiple vcf_files with corresponding lines.
-    """
-    import itertools
-    def __init__(self,in_fhs,intervals, **kwa):
-        #this is a bit sloppy, the further in_fhs are not tested whether
-        #they can be queried with tabix
-        super(MultiInputSerialParser, self).__init__(in_fhs[0],intervals,**kwa)
-        self.in_fh = in_fhs
-
-
-    def _yield_split_line(self,fhs):
-        """
-        The line in the tabix iterator is already split.
-        """
-        nxt = lambda fh: super(MultiInputSerialParser, self)._yield_split_line(fh)
-        while True:
-            lines = [nxt(fh) for fh in fhs]
-            #lines = [fhi.next() for fhi in fh]
-            poss = [int(l[1]) for l in lines]
-            assert len(set([l[0] for l in lines])) <= 1, ("Unequal chromosomes in "
-                                                "MultiInSerialParser not implemented.")
-            while max(poss)>min(poss):
-                lines = [lines[i]  if poss[i]==max(poss) else nxt(fhs[i]) for i in range(len(lines))]
-                poss = [int(l[1]) for l in lines]
-            yield tuple(lines)
+#class MultiInputSerialParser(SerialParser):
+#    """
+#    Parse multiple vcf_files with corresponding lines.
+#    """
+#    import itertools
+#    def __init__(self,in_fhs,intervals, **kwa):
+#        #this is a bit sloppy, the further in_fhs are not tested whether
+#        #they can be queried with tabix
+#        super(MultiInputSerialParser, self).__init__(in_fhs[0],intervals,**kwa)
+#        self.in_fh = in_fhs
+#
+#
+#    def _yield_split_line(self,fhs):
+#        """
+#        The line in the tabix iterator is already split.
+#        """
+#        nxt = lambda fh: super(MultiInputSerialParser, self)._yield_split_line(fh)
+#        while True:
+#            lines = [nxt(fh) for fh in fhs]
+#            #lines = [fhi.next() for fhi in fh]
+#            poss = [int(l[1]) for l in lines]
+#            assert len(set([l[0] for l in lines])) <= 1, ("Unequal chromosomes in "
+#                                                "MultiInSerialParser not implemented.")
+#            while max(poss)>min(poss):
+#                lines = [lines[i]  if poss[i]==max(poss) else nxt(fhs[i]) for i in range(len(lines))]
+#                poss = [int(l[1]) for l in lines]
+#            yield tuple(lines)
 
 class MultiRegionParallelParser(SerialParser):
     def __init__(self, in_fh, intervals,
@@ -1049,6 +1051,7 @@ add_analysis('filter_missing_stats',
 
 
 #-----------create_indel_bed--------------
+#attention bed has 0-based coordinates while VCF has 1-based coordinates
 
 info = ("Creates a bed file with the intervals "
        "of all indels in the input vcf.")
@@ -1089,36 +1092,145 @@ add_analysis("create_indel_bed",
                                            'to left and right. Default 0.'},
             line_write_vars=['out_bed'])
 
+#----------create_adjacent_snp_bed--------------------
+#attention bed has 0-based coordinates while VCF has 1-based coordinates
 
-#info = ("Filter vcf for intervals bed file. "
-#        "This parser is experimental, only working for special cases.")
-#
-#def filter_vcf_by_bed_setup_fun(arg_dic):
-#    arg_dic['in_bed_fh'] = open(arg_dic['in_bed'])
-#    arg_dic['out_vcf_fh'] = open(arg_dic['out_vcf'])
-#
-#def filter_vcf_by_bed_parse_fun(vcf_line,bed_line,arg_dic):
-#....
-#
-#add_analysis("create_indel_bed",
-#            {'setup_fun': create_indel_bed_setup_fun,
-#            'header_fun': create_indel_bed_header_fun,
-#            'parse_fun': create_indel_bed_parse_fun,
-#            },
-#            info,
-#            always_req_params=\
-#            {'in_bed':'Filepath of the input bed.',
-#             'overwrite':'Overwrite all other filters '
-#                        'and mark sites as PASS if not '
-#                       'covered by the filter. Default False.',
-#             'out_vcf':'Filepath to output vcf.'},
-#            line_write_vars=['out_vcf'])
+info = ("Creates a bed file with the intervals "
+       "of all adjacent or close snps in the input vcf.")
+
+def create_adjacent_snp_bed_setup_fun(arg_dic):
+    arg_dic["out_bed_fh"] = open(arg_dic["out_bed"],'w')
+    if 'extend_interval' not in arg_dic:
+        arg_dic['extend_interval'] = 0
+    else:
+        arg_dic['extend_interval'] = int(arg_dic['extend_interval'])
+    if 'min_dist' not in arg_dic:
+        arg_dic['min_dist'] = 2
+    else:
+        arg_dic['min_dist'] = int(arg_dic['min_dist'])
+    arg_dic['contig_dic'] = {}
+    arg_dic['last_chrom'] = None
+    arg_dic['last_pos'] = -inf
+    arg_dic['intv_start'] = False
+    arg_dic['intv_end'] = False
+
+def create_adjacent_snp_bed_header_fun(line, arg_dic):
+    if line[:9] == '##contig=':
+        c_dic = get_header_line_dic(line)
+        arg_dic['contig_dic'].update({c_dic['ID']:int(c_dic['length'])})
+
+def create_adjacent_snp_bed_parse_fun(line,arg_dic):
+    ref = line[3]
+    alt = line[4].split(',')
+    pos = int(line[1])
+    chrom = line[0]
+    
+    if alt[0] in nucleotides: #SNP?
+        if arg_dic['last_chrom'] != chrom:
+            if arg_dic['intv_start']:
+                arg_dic['intv_end'] = arg_dic['last_pos']
+        elif pos - arg_dic['last_pos'] < arg_dic['min_dist']:
+            if not arg_dic['intv_start']:
+                arg_dic['intv_start'] = arg_dic['last_pos']
+        elif arg_dic['intv_start']:
+            arg_dic['intv_end'] = arg_dic['last_pos']
+
+        if arg_dic['intv_start'] and arg_dic['intv_end']:
+            start = max(0, arg_dic['intv_start'] - 1 - arg_dic['extend_interval'])
+            end = min(arg_dic['contig_dic'][arg_dic['last_chrom']], arg_dic['intv_end'] + arg_dic['extend_interval'])
+            arg_dic['out_bed_fh'].write("{}\t{}\t{}\n".format(arg_dic['last_chrom'],start,end))
+            arg_dic['intv_start'] = False
+            arg_dic['intv_end'] = False
+        arg_dic['last_chrom'] = chrom
+        arg_dic['last_pos'] = pos
+
+def create_adjacent_snp_bed_cleanup_fun(arg_dic):
+    if arg_dic['intv_end']:
+        start = max(0, arg_dic['intv_start'] - 1 - arg_dic['extend_interval'])
+        end = min(arg_dic['contig_dic'][arg_dic['last_chrom']], arg_dic['intv_end'] + arg_dic['extend_interval'])
+        arg_dic['out_bed_fh'].write("{}\t{}\t{}\n".format(arg_dic['last_chrom'],start,end))
+
+
+add_analysis("create_adjacent_snp_bed",
+            {'setup_fun': create_adjacent_snp_bed_setup_fun,
+            'header_fun': create_adjacent_snp_bed_header_fun,
+            'parse_fun': create_adjacent_snp_bed_parse_fun,
+            'cleanup_fun':create_adjacent_snp_bed_cleanup_fun
+            },
+            info,
+            always_req_params=\
+            {'out_bed':'Filepath of the output bed.'},
+            opt_params={'extend_interval':'Extend the interval by n bases '
+                                           'to left and right. Default 0.',
+                        'min_dist':'Minimun distance between SNPs not to be masked.'
+                                    'Default 2 meaning that only directly adjacent SNPs are included.'},
+            line_write_vars=['out_bed'])
+
+
+#---------filter_by_bed----------
+
+info = ("Add filter tag to sites in intervals of bed file. "
+        "This parser is experimental, only working for special cases.")
+
+def filter_by_bed_setup_fun(arg_dic):
+    if isinstance(arg_dic['in_beds'], basestring):
+        arg_dic['in_beds'] = [arg_dic['in_beds']]
+    if isinstance(arg_dic['filter_names'], basestring):
+        arg_dic['filter_names'] = [arg_dic['filter_names']]
+    assert len(arg_dic['filter_names']==arg_dic['in_beds']), "There must be as many filter names as beds."
+    arg_dic['in_beds_fh'] = [open(b) for b in arg_dic['in_beds']] 
+    arg_dic['out_vcf_fh'] = open(arg_dic['out_vcf'])
+    arg_dic['last_rec'] = [None for b in arg_dic['in_beds']]
+
+
+def filter_by_bed_header_fun(arg_dic):
+    arg_dic['out_vcf_fh'].write(line)
+
+
+def filter_by_bed_parse_fun(line,arg_dic):
+    def get_rec(fh):
+        rec = fh.next().strip().split()
+        rec[1] = int(rec[1])
+        rec[2] = int(rec[2])
+    return rec
+
+    ref = line[3]
+    alt = line[4].split(',')
+    pos = int(line[1])
+    chrom = line[0]
+    for i in range(len(arg_dic['last_rec'])):
+        if arg_dic['last_rec'][i] is None or arg_dic['last_rec'][i][2]<pos:
+            arg_dic['last_rec'][i] = get_rec(arg_dic['in_bed_fh'][i])
+        if arg_dic['last_rec'][i][0] == chrom \
+            and arg_dic['last_rec'][i][1] < pos \
+            and arg_dic['last_rec'][i][2] > pos:
+            if line[6] in ['.','PASS']:
+                line[6] = arg_dic['filter_names'][i]
+            else:
+                line[6] = line[6] + ','  + arg_dic['filter_names'][i]
+    arg_dic['out_vcf_fh'].write("\t".join(line)+'\n')
+
+
+add_analysis("filter_by_bed",
+            {'setup_fun': filter_by_bed_setup_fun,
+            'header_fun': filter_by_bed_header_fun,
+            'parse_fun': filter_by_bed_parse_fun,
+            },
+            info,
+            always_req_params=\
+            {'in_beds':'Filepath of the input beds.',
+             'filter_names':'Filter names corresponding to beds.',
+             #'overwrite':'Overwrite all other filters '
+             #           'and mark sites as PASS if not '
+             #          'covered by the filter. Default False.',
+             'out_vcf':'Filepath to output vcf.'},
+            line_write_vars=['out_vcf'])
 
 
 #------------samtools_to_gatk-------------
 
 
-info = ("Samtools to GATK format")
+info = ("Samtools to GATK format. !!!Experimental!!!")
 
 
 def samtools_to_gatk_setup_fun(arg_dic):
@@ -1150,17 +1262,7 @@ if __name__ == "__main__":
     import argparse
     import select
     import time
-    #def get_interval(interval_string):
-        #"""
-        #Parse Chr3:600-34000 into tuple.
-        #Interval specifications as in samtools.
-        #"""
-        #ist = interval_string.split(':')
-        #chr = ist[0]
-        #try
-        #pos = 
 
-    
     parser = argparse.ArgumentParser(description="Parse a Variant Call Format (VCF) file.")
     parser.add_argument("--variant",'-V',type = argparse.FileType('r'), default = '-', help="Input vcf filepath.")
     parser.add_argument("--analysis_type","-T", choices = analyses.keys(),
