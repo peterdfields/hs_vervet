@@ -132,7 +132,7 @@ class Parser(object):
                                             "ascending order at: {}:{},{}".format(chrom,prev_pos,pos)
             if pos == self.prev_pos:
                 self.multiple_count += 1
-                if self.multiple_count > 100 and print_warning:
+                if self.multiple_count > 100 and self.print_warning:
                     logging.warning("Omitting further multiple entry warnings.")
                     self.print_warning = False
                 elif self.print_warning:
@@ -1081,7 +1081,10 @@ def create_indel_bed_parse_fun(line,arg_dic):
     chrom = line[0]
     if len(ref)>1 or [a for a in alt if len(a)>1]:
         start = max(0, pos - 1 - arg_dic['extend_interval'])
-        end = min(arg_dic['contig_dic'][chrom],start + len(ref) + arg_dic['extend_interval'])
+        end = min(arg_dic['contig_dic'][chrom],
+                  pos + len(ref) + arg_dic['extend_interval'])
+        #print "start", start
+        #print "end", end
         arg_dic['out_bed_fh'].write("{}\t{}\t{}\n".format(chrom,start,end))
 
 
@@ -1115,7 +1118,7 @@ def create_adjacent_snp_bed_setup_fun(arg_dic):
         arg_dic['min_dist'] = int(arg_dic['min_dist'])
     arg_dic['contig_dic'] = {}
     arg_dic['last_chrom'] = None
-    arg_dic['last_pos'] = -inf
+    arg_dic['last_pos'] = -np.inf
     arg_dic['intv_start'] = False
     arg_dic['intv_end'] = False
 
@@ -1182,13 +1185,13 @@ def filter_by_bed_setup_fun(arg_dic):
         arg_dic['in_beds'] = [arg_dic['in_beds']]
     if isinstance(arg_dic['filter_names'], basestring):
         arg_dic['filter_names'] = [arg_dic['filter_names']]
-    assert len(arg_dic['filter_names']==arg_dic['in_beds']), "There must be as many filter names as beds."
+    assert len(arg_dic['filter_names'])==len(arg_dic['in_beds']), "There must be as many filter names as beds."
     arg_dic['in_beds_fh'] = [open(b) for b in arg_dic['in_beds']] 
-    arg_dic['out_vcf_fh'] = open(arg_dic['out_vcf'])
+    arg_dic['out_vcf_fh'] = open(arg_dic['out_vcf'],'w')
     arg_dic['last_rec'] = [None for b in arg_dic['in_beds']]
 
 
-def filter_by_bed_header_fun(arg_dic):
+def filter_by_bed_header_fun(line,arg_dic):
     arg_dic['out_vcf_fh'].write(line)
 
 
@@ -1197,7 +1200,7 @@ def filter_by_bed_parse_fun(line,arg_dic):
         rec = fh.next().strip().split()
         rec[1] = int(rec[1])
         rec[2] = int(rec[2])
-    return rec
+        return rec
 
     ref = line[3]
     alt = line[4].split(',')
@@ -1205,10 +1208,10 @@ def filter_by_bed_parse_fun(line,arg_dic):
     chrom = line[0]
     for i in range(len(arg_dic['last_rec'])):
         if arg_dic['last_rec'][i] is None or arg_dic['last_rec'][i][2]<pos:
-            arg_dic['last_rec'][i] = get_rec(arg_dic['in_bed_fh'][i])
+            arg_dic['last_rec'][i] = get_rec(arg_dic['in_beds_fh'][i])
         if arg_dic['last_rec'][i][0] == chrom \
             and arg_dic['last_rec'][i][1] < pos \
-            and arg_dic['last_rec'][i][2] > pos:
+            and arg_dic['last_rec'][i][2] + 1 > pos:
             if line[6] in ['.','PASS']:
                 line[6] = arg_dic['filter_names'][i]
             else:
