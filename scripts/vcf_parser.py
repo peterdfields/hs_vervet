@@ -11,6 +11,9 @@ Todo:
  (or _yield generator for each addidional input in the future parser class)
 Make class to package parse funs:
 arg_dic --> self
+
+
+!!!! skip duplicate does not work????
 """
 import sys, os, json, uuid
 import logging
@@ -1207,8 +1210,12 @@ def filter_by_bed_parse_fun(line,arg_dic):
     pos = int(line[1])
     chrom = line[0]
     for i in range(len(arg_dic['last_rec'])):
-        if arg_dic['last_rec'][i] is None or arg_dic['last_rec'][i][2]<pos:
-            arg_dic['last_rec'][i] = get_rec(arg_dic['in_beds_fh'][i])
+        if arg_dic['last_rec'][i] is None or arg_dic['last_rec'][i][0]!=chrom \
+                                          or arg_dic['last_rec'][i][2]<pos:
+            try:
+                arg_dic['last_rec'][i] = get_rec(arg_dic['in_beds_fh'][i])
+            except StopIteration:
+                pass
         if arg_dic['last_rec'][i][0] == chrom \
             and arg_dic['last_rec'][i][1] < pos \
             and arg_dic['last_rec'][i][2] + 1 > pos:
