@@ -73,7 +73,7 @@ class Walker(object):
         if not hasattr(in_fh, 'read'):
             logging.info("in_fh has no .read method. Assuming it is a filepath string.")
             extension = os.path.splitext(in_fh)[-1]
-            if extension == '.gz':
+            if extension in ['.gz','.bgz']:
                 in_fh = gzip.open(eu(in_fh))
             else:
                 logging.warning("Unrecognized file extension. "
@@ -219,18 +219,71 @@ class SerialWalker(Walker):
     since pytabix does the line splitting automatically.
     """
     def __init__(self,in_fh,parser,intervals,auto_tabix=False, **kwa):
+        auto_tabix = True #DEV
         super(SerialWalker, self).__init__(in_fh, parser, **kwa)
         self.intervals = intervals
-        self.tabix_fh = tabix.open(in_fh.name)
+        self.tabix_fh = tabix.open(self.in_fh.name)
         try:
             self._query_tabix(intervals[0])
         except tabix.TabixError, e:
-            logging.error("Tabix raised error: {}".format(str(e)))
-            logging.warning("Compress file with bgzip and produce tabix index.")
-            raise e
-            #if auto_tabix:
-            #    logging.warning("Tabix raised error: {}".format(str(e)))
-            #    p=subrocess.Popen([tabix])
+            logging.warning("Tabix raised error: {}".format(str(e)))
+            if auto_tabix:
+                logging.warning("Trying to (re-)index file. This can take a while.")
+                p = subprocess.Popen(['tabix','-p','vcf','-f',self.in_fh.name],
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                out, err = p.communicate()
+                if p.returncode != 0:
+                    if "was bgzip used to compress this file" in err:
+                        base, extension  = os.path.splitext(self.in_fh.name)
+                        if extension in ['.gz','.bgz']:
+                            logging.warning("File seems not to be compressed with bgzip but ends in .gz or.bgz. "
+                                             "Trying to decompress. This can take a while.")
+
+                            p = subprocess.Popen(['gzip','-d','-f',self.in_fh.name],
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                            out, err = p.communicate()
+                            if p.returncode != 0:
+                                print err
+                                raise e
+                            name  = base
+                            logging.warning("Trying to compress. This can take a while.")
+    
+                        else:
+                            logging.warning("File seems not to be compressed with bgzip. "
+                                             "Trying to compress. This can take a while.")
+                            name = self.in_fh.name
+
+                        p = subprocess.Popen(['bgzip','-f',name],
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        out, err = p.communicate()
+                        if p.returncode != 0:
+                            print err
+                            raise
+                        logging.warning("Trying to index file. This can take a while.")
+                        self.in_fh = gzip.open(name+'.gz')
+                        p = subprocess.Popen(['tabix','-p','vcf','-f',self.in_fh.name],
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        out, err = p.communicate()
+                        if p.returncode != 0:
+                            print err
+                            raise
+                    else:
+                        logging.error("Reindexing failed with unhandeled error: {}".format(err))
+                        raise e
+                self.tabix_fh = tabix.open(self.in_fh.name)
+                try:
+                    self._query_tabix(intervals[0])
+                except tabix.TabixError, e:
+                    logging.error("Failed to auto-tabix input file.")
+                    logging.error("Is the interval {} in the vcf? ".format(intervals[0]))
+                    raise e
+                logging.info("Auto-tabix successful.")
+            else:
+                logging.error("Is file compressed with bgzip and does it have tabix index? "
+                                " If not, produce it or run with auto_tabix=True.")
+                logging.error("Is the interval {} in the vcf? ".format(intervals[0]))
+                raise e
+        print self.in_fh.name
 
 
     def _query_tabix(self,interval):
@@ -243,6 +296,9 @@ class SerialWalker(Walker):
                 logging.error("Chromosome must be string and position integer."
                                                " e.g. ('Chr1',1000000,1005000). "
                                 "Alternatively use string 'Chr:1000000-1005000'")
+                raise e
+            except tabix.TabixError:
+                logging.error("Is the interval {} in the vcf? ".format(interval))
                 raise e
 
     def _split_line(self,line):
@@ -337,7 +393,6 @@ class SingleRegionParallelWalker(MultiRegionParallelWalker):
                                                            "single interval.")
         #logging.info("One interval specified, starting single_region_parallel mode with {} cores.".format(ncpus))
         super(SingleRegionParallelWalker, self).__init__(in_fh, parser, intervals, **kwa)
-        self.in_fh = in_fh
         region = intervals[0]
         try:
             #self.tabix_fh.querys(region)
@@ -759,15 +814,15 @@ if __name__ == "__main__":
     except TypeError: #the above check does not work for tabix
         pass
 
-    extension = os.path.splitext(args.variant.name)[-1]
-    if extension == '.gz':
-        args.variant = gzip.open(args.variant.name)
-    else:
-        assert not args.intervals,("Interval mode (-L) only supported on bgzipped "
-                             "files with tabix index. But input has not ending .gz")
-        if  extension != '.vcf':
-            logging.warning("Unrecognized file extension. "
-                            "Assuming this is a vcf: {}".format(args.variant.name))
+#    extension = os.path.splitext(args.variant.name)[-1]
+#    if extension == '.gz':
+#        args.variant = gzip.open(args.variant.name)
+#    else:
+#        assert not args.intervals,("Interval mode (-L) only supported on bgzipped "
+#                             "files with tabix index. But input has not ending .gz")
+#        if  extension != '.vcf':
+#            logging.warning("Unrecognized file extension. "
+#                            "Assuming this is a vcf: {}".format(args.variant.name))
 
 
 
