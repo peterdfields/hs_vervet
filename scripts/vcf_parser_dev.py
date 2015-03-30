@@ -3,19 +3,20 @@
 Different functions to parse a  VCF.
 See argparse help.
 Todo:
--- call parser classer walkers
--- package parse functions in parser classes
--- handle multiple input within argdic 
 -- the current line should be stored in arg_dic
 -- and the next() method should be called withn the parse function
  (or _yield generator for each addidional input in the future parser class)
 Make class to package parse funs:
 arg_dic --> self
+
+ATTENTION:
+If ever adding a reference to the walker as an attribute to the parser,
+then the deepcopy in MultiRegionParallelWalker might make problems.
+
 """
-import sys, os, json, uuid
-import logging, argparse
+import sys, os, json, uuid, gzip
+import logging, argparse, inspect, copy
 import numpy as np
-import pandas as pd
 import subprocess
 import multiprocessing as mp
 logger = logging.getLogger()
@@ -25,9 +26,14 @@ logger.setLevel(logging.DEBUG)
 eu = os.path.expanduser
 jn = os.path.join
 try:
+    import pandas as pd
+except ImportError:
+    logging.warning('Python pandas could not be imported. Several parsers will not work.')
+
+try:
     import tabix
 except ImportError:
-    logging.warning('pytabix could not be imported. No support for interval use.')
+    logging.warning('pytabix could not be imported. No support for interval or parallel use.')
 
 # assure that all errors get logged
 def excepthook(*args):
@@ -53,7 +59,8 @@ class Walker(object):
     line in the file.
 
     Input:
-    in_fh ... file handle of input text file
+    in_fh ... file handle or filename of input delimited
+              text file. Can be compressed with gzip or bgzip.
     parser... object instance that derives 
               from Parser class
     Examples:
@@ -63,6 +70,15 @@ class Walker(object):
                                id='',
                                     skip_multiple_entries=True,
                                     progress_report_interval=50000,**kwa):
+        if not hasattr(in_fh, 'read'):
+            logging.info("in_fh has no .read method. Assuming it is a filepath string.")
+            extension = os.path.splitext(in_fh)[-1]
+            if extension == '.gz':
+                in_fh = gzip.open(eu(in_fh))
+            else:
+                logging.warning("Unrecognized file extension. "
+                                "Assuming this is a vcf: {}".format(in_fh))
+                in_fh = open(eu(in_fh))
         self.in_fh = in_fh
         self.sep = sep
         self.parser = parser
@@ -101,7 +117,7 @@ class Walker(object):
         pos = int(line[1])
         if chrom == self.prev_chrom:
             assert pos >= self.prev_pos, "vcf positions not in "\
-                                            "ascending order at: {}:{},{}".format(chrom,prev_pos,pos)
+                                            "ascending order at: {}:{},{}".format(chrom,self.prev_pos,pos)
             if pos == self.prev_pos:
                 self.multiple_count += 1
                 if self.multiple_count > 100 and self.print_warning:
@@ -135,7 +151,6 @@ class Walker(object):
             return False
 
 
-
     def parse_header(self):
         logging.info("Parsing header.")
         for line in self.in_fh:
@@ -143,11 +158,9 @@ class Walker(object):
                 self._header_line_parser(line)
             else:
                 break
-        for v in vars(self.parser):
-            #to be sure that header is written before body
-            #personally I find duck-typing dangerous...
+        for a in self.parser.line_write_attrs:
             try:
-                getattr(self.parser,v).flush()
+                getattr(self.parser,a).flush()
             except AttributeError:
                 pass
 
@@ -169,11 +182,11 @@ class Walker(object):
         if self.parser.cleanup_fun is not None:
             logging.info("Starting cleanup.")
             self.parser.cleanup_fun()
-        for v in vars(self.parser):
+        for a in self.parser.line_write_attrs:
             #to be sure that header is written before body
             #personally I find duck-typing dangerous...
             try:
-                getattr(self.parser,v).close()
+                getattr(self.parser,a).close()
             except AttributeError:
                 pass
 
@@ -195,26 +208,19 @@ class Walker(object):
 
 class SerialWalker(Walker):
     """
-    Parse several regions serially.
-    Only the parse function of parser 
-    is applied to each
-    (tabix) file handle.
+    Walk trough several regions serially.
+    Same arguments as Walker, with the addition:
     Input:
-    vcf_fh ... file handle of vcf 
+    in_fh ... file handle of vcf 
                (must be tabixed and opened with gvcf)
     intervals ... list of string intervals, in Samtools format,
                                             such as Chr1:1-5000
-    kwa ... same keyword arguments as VCFWalker.
-    
     Note that SerialWalker does not support seperator specification,
     since pytabix does the line splitting automatically.
     """
     def __init__(self,in_fh,parser,intervals,auto_tabix=False, **kwa):
-        super(SerialWalker, self).__init__(in_fh,parser,**kwa)
+        super(SerialWalker, self).__init__(in_fh, parser, **kwa)
         self.intervals = intervals
-        #if 'line_write_vars' not in kwa or kwa['line_write_vars'] is None:
-        #    kwa['line_write_vars'] = []
-        #self.line_wire_vars = kwa['line_write_vars']
         self.tabix_fh = tabix.open(in_fh.name)
         try:
             self._query_tabix(intervals[0])
@@ -260,43 +266,16 @@ class SerialWalker(Walker):
         self.output()
         logging.info("Run finished.")
 
-#class MultiInputSerialWalker(SerialWalker):
-#    """
-#    Parse multiple vcf_files with corresponding lines.
-#    """
-#    import itertools
-#    def __init__(self,in_fhs,intervals, **kwa):
-#        #this is a bit sloppy, the further in_fhs are not tested whether
-#        #they can be queried with tabix
-#        super(MultiInputSerialWalker, self).__init__(in_fhs[0],intervals,**kwa)
-#        self.in_fh = in_fhs
-#
-#
-#    def _yield_split_line(self,fhs):
-#        """
-#        The line in the tabix iterator is already split.
-#        """
-#        nxt = lambda fh: super(MultiInputSerialWalker, self)._yield_split_line(fh)
-#        while True:
-#            lines = [nxt(fh) for fh in fhs]
-#            #lines = [fhi.next() for fhi in fh]
-#            poss = [int(l[1]) for l in lines]
-#            assert len(set([l[0] for l in lines])) <= 1, ("Unequal chromosomes in "
-#                                                "MultiInSerialWalker not implemented.")
-#            while max(poss)>min(poss):
-#                lines = [lines[i]  if poss[i]==max(poss) else nxt(fhs[i]) for i in range(len(lines))]
-#                poss = [int(l[1]) for l in lines]
-#            yield tuple(lines)
 
 class MultiRegionParallelWalker(SerialWalker):
-    def __init__(self, in_fh, intervals,
+    def __init__(self, in_fh, parser, intervals,
                             ncpus='auto', tmp_dir='.',**kwa):
-        super(MultiRegionParallelWalker, self).__init__(in_fh,intervals,**kwa)
-        self.reduce_fun = kwa['reduce_fun']
-        arg_dic = kwa['arg_dic']
-        del kwa['arg_dic']
-        kwa['header_fun'] = None
-        self.parsers_kwa = kwa
+        super(MultiRegionParallelWalker, self).__init__(in_fh,parser,intervals,**kwa)
+        assert hasattr(self.parser,'reduce_fun'), ("Parser {} has no reduce_fun method. "
+                                                 "No support for parallel execution.")
+        if self.parser.reduce_fun is None:
+            logging.warning("Reduce function is None. Is this really intended?")
+        self.kwa = kwa
         if ncpus == 'auto':
             ncpus = mp.cpu_count()
         self.ncpus = ncpus
@@ -307,45 +286,43 @@ class MultiRegionParallelWalker(SerialWalker):
         logging.info("{} regions specified.  Parallelising by region. "
                      "Using {} processes.".format(len(self.intervals),self.ncpus))
 
-    def setup_parsers(self):
-        parsers = []
+    def setup_subwalkers(self):
+        subwalkers = []
         temp_files = []
         for i,interval in enumerate(self.intervals):
-            p_arg_dic = self.arg_dic.copy()
-            for var in self.line_write_vars:
-                tmp_fn = jn(self.tmp_dir,var+str(uuid.uuid4()) + \
-                                        "_" + str(i) + ".tmp")
-                p_arg_dic[var] = tmp_fn
-                temp_files.append(tmp_fn)
-            parsers.append(SerialWalker(self.in_fh, [interval],
-                                        arg_dic=p_arg_dic, id="Interval {}:".format(interval), **self.parsers_kwa))
-        self.parsers = parsers
+            subparser = copy.deepcopy(self.parser)
+            subparser.header_fun = None #don't parse header in subparser
+            parse_source = inspect.getsource(subparser.parse_fun)
+            for a in subparser.line_write_attrs:
+                tmp_file = open(jn(self.tmp_dir,a+str(uuid.uuid4()) + \
+                                        "_" + str(i) + ".tmp"),'w')
+                temp_files.append(tmp_file)
+                setattr(subparser,a,tmp_file)
+            subwalkers.append(SerialWalker(self.in_fh, subparser, [interval],
+                                         id="Interval {}:".format(interval), **self.kwa))
+        self.subwalkers = subwalkers
         self.temp_files = temp_files
 
     def reduce(self):
-        if self.reduce_fun is not None:
+        if self.parser.reduce_fun is not None:
             logging.info("Starting reduce step.")
-            self.reduce_fun(self.arg_dic,[ad for ad in self.out_arg_dics])
+            self.parser.reduce_fun([s.parser for s in self.subwalkers])
         else:
             logging.warning("No reduce function given. Won't do anything.")
 
     def del_temp_files(self):
         logging.info("Removing temp files.")
         while self.temp_files:
-            os.remove(self.temp_files.pop())
+            os.remove(self.temp_files.pop().name)
 
     def run_parser(self,i):
-        self.parsers[i].run_no_output()
-        return self.parsers[i].arg_dic
+        self.subwalkers[i].run_no_output()
 
     def run(self):
-        self.setup()
         self.parse_header()
         self.set_ncpus()
-        self.setup_parsers()
-        out_arg_dics = parmap(self.run_parser,range(len(self.parsers)))
-        self.out_arg_dics = out_arg_dics
-        logging.info("Reducing.")
+        self.setup_subwalkers()
+        parmap(self.run_parser,range(len(self.subwalkers)))
         self.reduce()
         logging.info("Creating output.")
         self.output()
@@ -355,11 +332,11 @@ class MultiRegionParallelWalker(SerialWalker):
 
 
 class SingleRegionParallelWalker(MultiRegionParallelWalker):
-    def __init__(self, in_fh, intervals, **kwa):
+    def __init__(self, in_fh, parser, intervals, **kwa):
         assert len(intervals) == 1, ("ParallelSingleRegionWalker requires a "
                                                            "single interval.")
         #logging.info("One interval specified, starting single_region_parallel mode with {} cores.".format(ncpus))
-        super(SingleRegionParallelWalker, self).__init__(in_fh, intervals, **kwa)
+        super(SingleRegionParallelWalker, self).__init__(in_fh, parser, intervals, **kwa)
         self.in_fh = in_fh
         region = intervals[0]
         try:
@@ -396,30 +373,14 @@ class SingleRegionParallelWalker(MultiRegionParallelWalker):
         super(SingleRegionParallelWalker, self).parse_header()
         self.intervals = self.get_intervals()
 
-#    def parse_header_contig_len(self):
-#        logging.info("Parsing header.")
-#        for line in self.in_fh:
-#            if line[0] == '#':
-#                if line[:9] == '##contig=':
-#                    contig_dic = get_header_line_dic(line)
-#                    if contig_dic['ID'] == self.chrom:
-#                        length = int(contig_dic['length'])
-#                        self.end = length
-#                if self.header_fun is not None:
-#                    self.header_fun(line,self.arg_dic)
-#            else:
-#                break
-
-        self.intervals = self.get_intervals()
-
     def _header_line_parser_search_contig_len(self,line):
         if line[:9] == '##contig=':
                     contig_dic = get_header_line_dic(line)
                     if contig_dic['ID'] == self.chrom:
                         length = int(contig_dic['length'])
                         self.end = length
-        if self.header_fun is not None:
-            self.header_fun(line,self.arg_dic)
+        if self.parser.header_fun is not None:
+            self.parser.header_fun(line)
 
     def get_intervals(self):
         n_chunks = self.ncpus
@@ -433,45 +394,13 @@ class SingleRegionParallelWalker(MultiRegionParallelWalker):
 
 ##------Parsers---------
 
-#analyses = {}
 
 
-parser = argparse.ArgumentParser(description="Parse a Variant Call Format (VCF) file.")
-parser.add_argument("--variant",'-V',required=True,type = argparse.FileType('r'), 
-                            default = '-', help="Input vcf filepath.")
 
-parser.add_argument("--intervals",'-L', nargs='*', dest='intervals', action='append',
-                        help='Specify intervals to consider e.g. Chr1:1-50000. '
-                             'Input vcf must be compressed with bgzip and indexed '
-                                                                      'with tabix.')
-parser.add_argument("--ncpus", '-nct',
-                    type=int, default=1,
-                              help='Number of processes for parallel parsing. '
-                                   ' Requires at least one interval to be '
-                                   'specified '
-                                   'with -L. \n'
-                                   '1) If a single interval is '
-                                   'specified (e.g. -L Chr1:1-5000000), '
-                                   'this interval will be split into equal parts. '
-                                   'If start/end are not given, we try to infer '
-                                   'them from the VCF header (tag contig=...). \n'
-                                   '2) If multiple intervals are specified, '
-                                   'we parallelise across intervals. \n'
-                                   'Parallel parsing is not implemented for all '
-                                   'analyses.')
-parser.add_argument("--skip_multiple_entries",action='store_true',
-                     help='Skip all but the first entry for the same site in the VCF.')
-parser.add_argument('--logging_level','-l',
-                    choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'],
-                    default='INFO',
-                                            help='Minimun level of logging.')
-parser.add_argument('--progress_report_interval',
-                    type=int, default=200000,
-                    help='Number of lines after which to report progress. '
-                                        'Only output if logging level >= INFO')
 
-subparsers = parser.add_subparsers(dest='parser',
-                                        help='Type of analysis/parser to run on input file.')
+temp_parser = argparse.ArgumentParser()
+
+subparsers = temp_parser.add_subparsers(dest='parser')
 
 class MetaParser(type):
     """
@@ -482,11 +411,39 @@ class MetaParser(type):
         newclass = super(MetaParser, cls).__new__(cls, clsname, bases, attrs)
         if clsname != 'Parser':
             
-            new_subparser = subparsers.add_parser(clsname,help=newclass.__doc__)
+            new_subparser = subparsers.add_parser(clsname,description=newclass.__doc__)
             args = getattr(newclass,'args')
             if args is not None:
+                newclass.line_write_attrs = []
+                newclass.line_read_attrs = []
                 for arg, pars in args.iteritems():
                     new_subparser.add_argument("--"+arg,**pars)
+                    #if argument is a file open in write/read mode 
+                    #and it is used in parse_fun --> add it to line_write_attr/ line_read_attrs
+                    try:
+                        t = pars['type']
+                        try:
+                            mode = t._mode
+                        except AttributeError:
+                            try:
+                                mode = t.mode
+                            except AttributeError:
+                                continue
+                        if  newclass.parse_fun is not None:
+                            parse_code = inspect.getsource(newclass.parse_fun)
+                            if arg in parse_code:
+                                if mode == 'w':
+                                    newclass.line_write_attrs.append(arg)
+                                elif mode == 'r':
+                                    newclass.line_read_attrs.append(arg)
+                                else:
+                                    logging.warning("Arg {} of parser class {} has _mode or mode "
+                                                    "attribute but mode is not 'w' or 'r'. "
+                                                    "This will cause problems if there is any read or write "
+                                                    " happening in within the parse method.".format(arg,clsname))
+                    except KeyError:
+                        pass
+
             #Add original Parser init to Child init.
             def parserinit(init):
                 def newinit(self,**kwa):
@@ -514,6 +471,9 @@ class Parser(object):
         for arg in kwa:
             assert arg in known_args, ("Unknown argument {},"
                                        "possible args are {}".format(arg,known_args.keys()))
+        #this is not really necessary, but useful if line_write_attr are changed in instance
+        #self.line_write_attrs = copy.copy(self.__class__.line_write_attrs)
+        #self.line_read_attrs = copy.copy(self.__class__.line_read_attrs)
         for arg in known_args:
             try:
                 a = kwa[arg]
@@ -524,10 +484,9 @@ class Parser(object):
                             a = []
                     except KeyError:
                         pass
-                setattr(self, arg, a)
             except KeyError:
                 try:
-                    d = known_args[arg]['default']
+                    a = known_args[arg]['default']
                 except KeyError:
                     req = False
                     try:
@@ -536,22 +495,23 @@ class Parser(object):
                     except KeyError:
                         pass
                     if not req:
-                        d = None
+                        a = None
                         try:
                             nargs = known_args[arg]['nargs']
                             if nargs in ['*','+']:
-                                d = []
+                                a = []
                         except KeyError:
                             pass
                     else:
                         raise TypeError("Argument {} not supplied but required.".format(arg))
-                #print "Argument {} not supplied, using default {}.".format(arg,d)
-                logging.info("Argument {} not supplied, using default {}.".format(arg,d))
-                setattr(self,arg,d)
+                logging.info("Argument {} not supplied, using default {}.".format(arg,a))
+            setattr(self,arg,a)
+            ##ATTENTION, if code in for loop is added here,
+            ##          beware of the continue in the try statement above
+    
     header_fun = None
     parse_fun = None
     cleanup_fun = None
-    reduce_fun = None
     output_fun = None
 
 
@@ -587,7 +547,6 @@ class VCFTo012(Parser):
 class FilterByBed(Parser):
     """
     Add filter tag to sites in intervals of bed file.
-    This parser is experimental, only working for special cases.
     """
     args = {'in_beds':
                       {'required':True,
@@ -640,42 +599,6 @@ class FilterByBed(Parser):
 
 
 
-
-#--------------------------------------------------------
-
-
-def get_parser(vcf_fh,analysis,**kwa):
-    check_params(kwa['arg_dic'],analysis['always_req_params'])
-    kwa.update(analysis['funs'])
-    try:
-        kwa['line_write_vars'] = analysis['line_write_vars']
-    except KeyError:
-        logging.warning('Analysis has no key "line_write_vars". Assuming '
-                        'that there is no output written line by line.')
-    if not 'intervals' in kwa or not kwa['intervals']:
-        #if 'intervals' in kwa:
-        #    del kwa['intervals']
-        if 'ncpus' in kwa and kwa['ncpus'] > 1:
-            logging.warning("For ncpus>1, specify at least one interval,  "
-                            "e.g., -L Chr1. Falling back to single process...")
-        #    del kwa['ncpus']
-        logging.info("Initialising Walker.")
-        parser = Walker(vcf_fh,**kwa)
-    elif 'ncpus' in kwa and kwa['ncpus'] > 1:
-        assert 'reduce_fun' in analysis['funs'],("This analysis does not support "
-                                                 "parallel execution, remove "
-                                                 "--ncpus option.")
-        if len(kwa['intervals']) == 1:
-            logging.info("Initialising SingleRegionParallelWalker.")
-            parser = SingleRegionParallelWalker(vcf_fh,**kwa)
-        else:
-            logging.info("Initialising MultiRegionParallelWalker.")
-            parser = MultiRegionParallelWalker(vcf_fh,**kwa)
-    else:
-        logging.info("Initialising SerialWalker.")
-        parser = SerialWalker(vcf_fh,**kwa)
-    return parser
-
 #parallel support
 
 
@@ -704,18 +627,7 @@ def parmap(f, X, nprocs = mp.cpu_count()):
     return [x for i,x in sorted(res)]
 
 
-#------support functions----------------
-
-#=====support setup======
-
-def try_add_out_fh(arg_dic,key):
-    try:
-        arg_dic[key+'_fh'] = open(eu(arg_dic[key]),'w')
-    except KeyError:
-        logging.warning("Could add filehandle for {}, no file specified. ".format(key))
-        #pass
-
-#====support parsing=====
+#---------support functions used by several parsers------------
 
 def get_header_line_dic(line):
     dic = {k:v for k,v in [t.split('=') for t  in line.strip().split('=<')[1][:-1].split(',')]}
@@ -759,26 +671,88 @@ def sum_countdics(countdics):
 def get_info_dic(line):
     return {k:v for (k,v) in [t.split('=') for t in line[7].split(';')]}
 
-#-----------------------------------------
-#--------parsing functions---------------
-#-----------------------------------------
-
-
 
 
 
 if __name__ == "__main__":
-    import gzip
     import select
     import time
 
 
-    args = parser.parse_args()
+    argparser = argparse.ArgumentParser(description="Parse a Variant Call Format (VCF) file.",
+                                                                                 add_help=False)
 
 
+    argparser.add_argument("--variant",'-V',required=True, type = argparse.FileType('r'),
+                                default = '-', help="Input vcf filepath.")
+    
+    argparser.add_argument("--parser",'-P', choices = subparsers.choices.keys(),
+                                                                help="Subparser to be used.")
+    
+    argparser.add_argument("--intervals",'-L', nargs='*', dest='intervals', action='append',
+                            help='Specify intervals to consider e.g. Chr1:1-50000. '
+                                 'Input vcf must be compressed with bgzip and indexed '
+                                                                          'with tabix.')
+    argparser.add_argument("--ncpus", '-nct',
+                            type=int, default=1,
+                                  help='Number of processes for parallel parsing. '
+                                       ' Requires at least one interval to be '
+                                       'specified '
+                                       'with -L. \n'
+                                       '1) If a single interval is '
+                                       'specified (e.g. -L Chr1:1-5000000), '
+                                       'this interval will be split into equal parts. '
+                                       'If start/end are not given, we try to infer '
+                                       'them from the VCF header (tag contig=...). \n'
+                                       '2) If multiple intervals are specified, '
+                                       'we parallelise across intervals. \n'
+                                       'Parallel parsing is not implemented for all '
+                                       'analyses.')
+    argparser.add_argument("--skip_multiple_entries",action='store_true',
+                         help='Skip all but the first entry for the same site in the VCF.')
+    argparser.add_argument('--logging_level','-l',
+                        choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'],
+                        default='INFO',
+                                                help='Minimun level of logging.')
+    argparser.add_argument('--progress_report_interval',
+                        type=int, default=200000,
+                        help='Number of lines after which to report progress. '
+                                            'Only output if logging level >= INFO')
+    argparser.add_argument("--help",'-h', action='store_true',
+                                                     help="Print help message and exit.")
+
+
+    args, unknown = argparser.parse_known_args()
+
+    
     logger.setLevel(getattr(logging,args.logging_level))
 
-    args.intervals = [a for b in args.intervals for a in b]
+ 
+    if args.help:
+        help_str = "\n"+argparser.format_help()
+        logger.setLevel(logging.INFO)
+    try:
+        subargparser = subparsers.choices[args.parser]
+        if args.help:
+            help_str += "\n\n-----------Help for parser {} ------------\n\n".format(args.parser) \
+                                                                         + subargparser.format_help()
+    except KeyError, e:
+        if args.help:
+            pass
+        elif args.parser is None:
+            argparser.error("argument --parser/-P is required")
+        else:
+            raise e
+
+    if args.help:
+       logging.info(help_str)
+       sys.exit(0)
+
+
+    sub_args = subargparser.parse_args(unknown)
+
+    if args.intervals is not None:
+        args.intervals = [a for b in args.intervals for a in b]
 
     try:
         assert select.select([args.variant,],[],[],0.0)[0], "Input vcf has no data."
@@ -798,37 +772,36 @@ if __name__ == "__main__":
 
 
     parser_class = globals()[args.parser]
-    #get attributes specific to subparser
-    parser_attr = [a.dest for a in subparsers.choices[args.parser]._actions if a.dest != 'help']
-    parser = parser_class(**{arg:getattr(args,arg) for arg in vars(args) if arg in parser_attr})
+    parser = parser_class(**{arg:getattr(sub_args,arg) for arg in vars(sub_args)})
 
     if args.intervals is None:
+        if args.ncpus > 1:
+            logging.warning("Ignoring --ncpus! Multiprocessing is only supported if at least one interval is specified, "
+                            "e.g., -L Chr1.")
 
         walker = Walker(args.variant, parser, sep='\t',
-                                                  id='',
                                         skip_multiple_entries=args.skip_multiple_entries,
                                         progress_report_interval=args.progress_report_interval)
     else:
-        print args.intervals
-        walker = SerialWalker(args.variant, parser, args.intervals, sep='\t',
-                                                                       id='',
-                                            skip_multiple_entries=args.skip_multiple_entries,
-                                            progress_report_interval=args.progress_report_interval)
+        if args.ncpus <= 1:
+            walker = SerialWalker(args.variant, parser, args.intervals, sep='\t',
+                                                skip_multiple_entries=args.skip_multiple_entries,
+                                                progress_report_interval=args.progress_report_interval)
+        elif len(args.intervals) > 1:
+            walker = MultiRegionParallelWalker(args.variant, parser, args.intervals, sep='\t', ncpus = args.ncpus,
+                                                    skip_multiple_entries=args.skip_multiple_entries,
+                                                    progress_report_interval=args.progress_report_interval)
+        else:
+            walker = SingleRegionParallelWalker(args.variant, parser, args.intervals, sep='\t', ncpus = args.ncpus,
+                                                    skip_multiple_entries=args.skip_multiple_entries,
+                                                    progress_report_interval=args.progress_report_interval)
+    logging.info("Using Walker {}".format(walker.__class__.__name__))
 
-
+    start = time.time()
     walker.run()
-    #print parser
-
-#        walker = get_parser(args.variant,analyses[args.analysis_type],
-#                             arg_dic=arg_dic, intervals = args.intervals,
-#                             ncpus=args.ncpus,
-#                                skip_multiple_entries=not args.no_skip_multiple_entries,
-#                                progress_report_interval=args.progress_report_interval)
-#        start = time.time()
-#        parser.run()
-#        end = time.time()
-#        delta = end - start
-#        logging.info("This run took {} seconds = {} minutes = {} hours.".format(delta,delta/60.,delta/3600.))
+    end = time.time()
+    delta = end - start
+    logging.info("This run took {} seconds = {} minutes = {} hours.".format(delta,delta/60.,delta/3600.))
 
 
 

@@ -12,6 +12,10 @@ Todo:
 Make class to package parse funs:
 arg_dic --> self
 
+ATTENTION:
+If ever adding a reference to the walker as an attribute to the parser,
+then the deepcopy in MultiRegionParallelWalker might make problems.
+
 
 !!!! skip duplicate does not work????
 """
