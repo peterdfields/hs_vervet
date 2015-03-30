@@ -138,15 +138,16 @@ class Parser(object):
                 if self.multiple_count > 100 and self.print_warning:
                     logging.warning("Omitting further multiple entry warnings.")
                     self.print_warning = False
-                elif self.print_warning:
-                    if not self.skip_multiple_entries:
+                if not self.skip_multiple_entries:
+                    if self.print_warning:
                         logging.warning("Multiple entries for pos {}:{}.\n"
                                   "Keeping all entries.".format(chrom,pos))
-                        return False
-                    else:
+                    return False
+                else:
+                    if self.print_warning:
                         logging.warning("Warning, multiple entries for pos {}:{}.\n"
                               "Skipping all but the first.".format(chrom,pos))
-                        return True
+                    return True
         self.prev_chrom = chrom
         self.prev_pos = pos
         return False
@@ -1192,6 +1193,7 @@ def filter_by_bed_setup_fun(arg_dic):
     arg_dic['in_beds_fh'] = [open(b) for b in arg_dic['in_beds']] 
     arg_dic['out_vcf_fh'] = open(arg_dic['out_vcf'],'w')
     arg_dic['last_rec'] = [None for b in arg_dic['in_beds']]
+    arg_dic['seen_chroms'] = set()
 
 
 def filter_by_bed_header_fun(line,arg_dic):
@@ -1209,13 +1211,15 @@ def filter_by_bed_parse_fun(line,arg_dic):
     alt = line[4].split(',')
     pos = int(line[1])
     chrom = line[0]
+    arg_dic['seen_chroms'].update((chrom,))
     for i in range(len(arg_dic['last_rec'])):
-        if arg_dic['last_rec'][i] is None or arg_dic['last_rec'][i][0]!=chrom \
-                                          or arg_dic['last_rec'][i][2]<pos:
+        while arg_dic['last_rec'][i] is None \
+                or (arg_dic['last_rec'][i][0]!=chrom and arg_dic['last_rec'][i][0] in arg_dic['seen_chroms']) \
+                                         or (arg_dic['last_rec'][i][0]==chrom and arg_dic['last_rec'][i][2]<pos):
             try:
                 arg_dic['last_rec'][i] = get_rec(arg_dic['in_beds_fh'][i])
             except StopIteration:
-                pass
+                break
         if arg_dic['last_rec'][i][0] == chrom \
             and arg_dic['last_rec'][i][1] < pos \
             and arg_dic['last_rec'][i][2] + 1 > pos:
