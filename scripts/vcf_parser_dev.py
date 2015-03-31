@@ -2,15 +2,9 @@
 """
 Different functions to parse a  VCF.
 See argparse help.
-Todo:
--- the current line should be stored in arg_dic
--- and the next() method should be called withn the parse function
- (or _yield generator for each addidional input in the future parser class)
-Make class to package parse funs:
-arg_dic --> self
 
 ATTENTION:
-If ever adding a reference to the walker as an attribute to the parser,
+If ever adding a reference to the walker as an attribute of the parser,
 then the deepcopy in MultiRegionParallelWalker might make problems.
 
 """
@@ -794,7 +788,9 @@ if __name__ == "__main__":
     argparser.add_argument("--intervals",'-L', nargs='*', dest='intervals', action='append',
                             help='Specify intervals to consider e.g. Chr1:1-50000. '
                                  'Input vcf must be compressed with bgzip and indexed '
-                                                                          'with tabix.')
+                                                                         'with tabix.')
+    argparser.add_argument("--auto_tabix",action='store_true',
+                                help="Automatically compress and/or index on the fly.")
     argparser.add_argument("--ncpus", '-nct',
                             type=int, default=1,
                                   help='Number of processes for parallel parsing. '
@@ -871,21 +867,24 @@ if __name__ == "__main__":
         if args.ncpus > 1:
             logging.warning("Ignoring --ncpus! Multiprocessing is only supported if at least one interval is specified, "
                             "e.g., -L Chr1.")
-
+        if args.auto_tabix:
+            logging.warning("Flag --auto_tabix given, but not in intervall (-L) mode, won't auto_tabix.")
         walker = Walker(args.variant, parser, sep='\t',
                                         skip_multiple_entries=args.skip_multiple_entries,
                                         progress_report_interval=args.progress_report_interval)
     else:
         if args.ncpus <= 1:
-            walker = SerialWalker(args.variant, parser, args.intervals, sep='\t',
+            walker = SerialWalker(args.variant, parser, args.intervals, sep='\t',auto_tabix=args.auto_tabix,
                                                 skip_multiple_entries=args.skip_multiple_entries,
                                                 progress_report_interval=args.progress_report_interval)
         elif len(args.intervals) > 1:
-            walker = MultiRegionParallelWalker(args.variant, parser, args.intervals, sep='\t', ncpus = args.ncpus,
+            walker = MultiRegionParallelWalker(args.variant, parser, args.intervals, sep='\t', auto_tabix=args.auto_tabix,
+                                                                                     ncpus=args.ncpus,
                                                     skip_multiple_entries=args.skip_multiple_entries,
                                                     progress_report_interval=args.progress_report_interval)
         else:
-            walker = SingleRegionParallelWalker(args.variant, parser, args.intervals, sep='\t', ncpus = args.ncpus,
+            walker = SingleRegionParallelWalker(args.variant, parser, args.intervals, sep='\t', auto_tabix=args.auto_tabix,
+                                                                                                    ncpus=args.ncpus,
                                                     skip_multiple_entries=args.skip_multiple_entries,
                                                     progress_report_interval=args.progress_report_interval)
     logging.info("Using Walker {}".format(walker.__class__.__name__))
