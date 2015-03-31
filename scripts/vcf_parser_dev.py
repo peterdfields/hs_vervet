@@ -65,19 +65,17 @@ class Walker(object):
                                     skip_multiple_entries=True,
                                     progress_report_interval=50000,**kwa):
         if not hasattr(in_fh, 'read'):
-            logging.info("in_fh has no .read method. Assuming it is a filepath string.")
+            logging.info("Input file has no .read method. Assuming it is a filepath string.")
             extension = os.path.splitext(in_fh)[-1]
             if extension in ['.gz','.bgz']:
-                #logging.info()
+                logging.info("Input file has extension {}. Opening with gzip.".format(extension))
                 in_fh = gzip.open(eu(in_fh))
             else:
-                #logging.warning("Unrecognized file extension. "
-                #                "Assuming this is a vcf: {}".format(in_fh))
                 in_fh = open(eu(in_fh))
         else:
             extension = os.path.splitext(in_fh.name)[-1]
             if extension in ['.gz','.bgz']:
-                #logging.info()
+                logging.info("Input file has extension {}. Opening with gzip.".format(extension))
                 in_fh = gzip.open(eu(in_fh.name))
         self.in_fh = in_fh
         self.sep = sep
@@ -639,23 +637,24 @@ class Parser(object):
                     else:
                         raise TypeError("Argument {} not supplied but required.".format(arg))
             setattr(self,arg,a)
-            #
-            for attr in self.line_write_attrs:
-                fh = getattr(self,attr)
-                if not hasattr(fh, 'write'):
-                    logging.info("{} has no .write method. Assuming it is a filepath string: {}.".format(attr,fh))
-                    fh = open(eu(fh),'w')
-                base, extension = os.path.splitext(fh.name)
-                if extension in ['.gz','.bgz']:
-                    logging.info("{} ends in {}, compressing with tabix on the fly.".format(attr, extension))
-                    base1, ext1 = os.path.splitext(base)
-                    if ext1 and ext1[1:] in ['gff', 'bed', 'sam', 'vcf', 'psltbl', 'gvcf']:
-                        logging.info("{} has ending {}, supposing that it is reference ordered data."
-                                                                        " Will create tabix index.".format(attr,ext1))
-                        index = 'vcf' if ext1 == 'gvcf' else ext1
-                    else:
-                        index = False
-                    setattr(self,attr,TabixWrite(fh,index))
+
+
+        for attr in self.line_write_attrs:
+            fh = getattr(self,attr)
+            if not hasattr(fh, 'write'):
+                logging.info("{} has no .write method. Assuming it is a filepath string: {}.".format(attr,fh))
+                fh = open(eu(fh),'w')
+            base, extension = os.path.splitext(fh.name)
+            if extension in ['.gz','.bgz']:
+                logging.info("{} ends in {}, compressing with tabix on the fly.".format(attr, extension))
+                base1, ext1 = os.path.splitext(base)
+                if ext1 and ext1[1:] in['gff', 'bed', 'sam', 'vcf', 'psltbl', 'gvcf']:
+                    logging.info("{} has ending {}, supposing that it is reference ordered data."
+                                                                    " Will create tabix index.".format(attr,ext1))
+                    index = 'vcf' if ext1[1:] == 'gvcf' else ext1[1:]
+                else:
+                    index = False
+                setattr(self,attr,TabixWrite(fh,index))
     header_fun = None
     parse_fun = None
     cleanup_fun = None
@@ -669,7 +668,6 @@ class TabixWrite(object):
         bgzip = subprocess.Popen(['bgzip','-c'], stdin=subprocess.PIPE, stdout=fh,stderr=subprocess.PIPE)
         self.bgzip = bgzip
         self.index = index
-        
 
     def write(self,string):
         self.bgzip.stdin.write(string)
@@ -678,14 +676,15 @@ class TabixWrite(object):
         self.bgzip.stdin.flush()
 
     def close(self):
-        self.bgzip.stdin.close()
         out, err = self.bgzip.communicate()
+        self.bgzip.stdin.close()
         if self.bgzip.returncode:
             logging.error("Failed to bgzip {}: {}".format(fh.name, err))
             raise IOError
         if self.index:
+            logging.info("Creating tabix index for {}: {}".format(fh.name, err))
             tabix = subprocess.Popen(['tabix','-p',self.index,self.fh.name],stderr=subprocess.PIPE)
-            out, err = tabix.communicate()
+            out, err = tabix.communicate() 
             if self.bgzip.returncode:
                 logging.warning("Failed to create tabix index for {}: {}".format(fh.name, err))
 
