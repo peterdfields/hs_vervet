@@ -118,7 +118,7 @@ class Walker(object):
                                             "ascending order at: {}:{},{}".format(chrom,self.prev_pos,pos)
             if pos == self.prev_pos:
                 self.multiple_count += 1
-                if self.multiple_count > 100 and self.print_warning:
+                if self.multiple_count > 10 and self.print_warning:
                     logging.warning("Omitting further multiple entry warnings.")
                     self.print_warning = False
                 if not self.skip_multiple_entries:
@@ -376,7 +376,7 @@ class MultiRegionParallelWalker(SerialWalker):
         self.parse_header()
         self.set_ncpus()
         self.setup_subwalkers()
-        subparsers = parmap(self.run_parser,range(len(self.subwalkers)))
+        subparsers = parmap(self.run_parser,range(len(self.subwalkers)),self.ncpus)
         self.subparsers = subparsers
         self.reduce()
         logging.info("Creating output.")
@@ -456,7 +456,7 @@ def fun(f,q_in,q_out):
             break
         q_out.put((i,f(x)))
 
-def parmap(f, X, nprocs = mp.cpu_count()):
+def parmap(f, X, nprocs):
     q_in   = mp.Queue(1)
     q_out  = mp.Queue()
 
@@ -524,6 +524,13 @@ def get_info_dic(line):
 void_parser = argparse.ArgumentParser()
 subparsers = void_parser.add_subparsers(dest='parser')
 
+
+parser_classes = {}
+def register(cls):
+   parser_classes[cls.__name__] = cls
+
+
+
 class MetaParser(type):
     """
     This meta-class handles the creation of subparsers
@@ -532,12 +539,13 @@ class MetaParser(type):
     def __new__(cls, clsname, bases, attrs):
         newclass = super(MetaParser, cls).__new__(cls, clsname, bases, attrs)
         if clsname != 'Parser':
+            register(newclass)
             new_subparser = subparsers.add_parser(clsname, description=newclass.__doc__)
             args = getattr(newclass,'args')
+            newclass.line_write_attrs = []
+            newclass.end_write_attrs = []
+            newclass.line_read_attrs = []
             if args is not None:
-                newclass.line_write_attrs = []
-                newclass.end_write_attrs = []
-                newclass.line_read_attrs = []
                 for arg, pars in args.iteritems():
                     new_subparser.add_argument("--"+arg,**pars)
                     #if argument is a file open in write/read mode 
@@ -679,14 +687,14 @@ class TabixWrite(object):
         out, err = self.bgzip.communicate()
         self.bgzip.stdin.close()
         if self.bgzip.returncode:
-            logging.error("Failed to bgzip {}: {}".format(fh.name, err))
+            logging.error("Failed to bgzip {}: {}".format(self.fh.name, err))
             raise IOError
         if self.index:
-            logging.info("Creating tabix index for {}: {}".format(fh.name, err))
+            logging.info("Creating tabix index for {}: {}".format(self.fh.name, err))
             tabix = subprocess.Popen(['tabix','-p',self.index,self.fh.name],stderr=subprocess.PIPE)
             out, err = tabix.communicate() 
             if self.bgzip.returncode:
-                logging.warning("Failed to create tabix index for {}: {}".format(fh.name, err))
+                logging.warning("Failed to create tabix index for {}: {}".format(self.fh.name, err))
 
 #class TabixFile(file):
 #    def __init__(self, *args):
@@ -817,6 +825,111 @@ class GetFilterStats(Parser):
             return self.filter_info
 
 
+class SNPEFFParser(Parser):
+    """
+    Extract genotype information into a tsv file.
+    Coding 0 for homozygous reference, 1 for heterozygote
+    and 2 for homozygous alternative allele.
+    Missing genotypes are coded by 'N'
+    """
+    args ={
+        'out_tsv':
+            {'required':True,
+             'type':argparse.FileType('w'),
+             'help':"File path to write output tsv to."}
+        }
+
+
+    CHR_IX =0
+    POS_IX =1
+    REF_IX =3
+    ALT_IX =4
+    INFO_IX =7
+    AT_START_IX = 9
+    AT_LENGTH = 1135
+    AT_END_IX = AT_START_IX+ AT_LENGTH
+    LYR_START_IX = 1171
+    LYR_END_IX = LYR_START_IX +2
+    REF = "0"
+    ALT = "1"
+    DOUBLE_REF = "00"
+    DOUBLE_ALT = "11"
+
+    def header_fun(self,line):
+        if line[1:6] == "CHROM":
+            self.out_tsv.write("chrom\tpos\tref\talt\tlyr\tgenotype\tinfo\n")
+
+    def parse_fun(self,sline):
+        output = self._filter_(sline)
+        if output is not None:
+            self.out_tsv.write("\t".join(output)+"\n")
+
+    def reduce_fun(self,selfs):
+        command = ["cat"]+[s.out_tsv.name for s in selfs]
+        p = subprocess.Popen(command, stdout=self.out_tsv)
+        p.communicate()
+
+
+    def _filter_(self,fields):
+        if fields[self.ALT_IX] == ".":
+            return None
+        if len(fields[self.REF_IX]) > 1 :
+            return None
+        lookupMap = self._create_set_(fields[self.AT_START_IX:self.AT_END_IX])
+        if len(lookupMap) != 2:
+            return None
+        alt = fields[self.ALT_IX]
+        genotype = "1"
+        if len(alt) > 1:
+            alt_split = alt.split(",")
+            if len(alt_split)  == 1:
+                return None
+            keys = set(lookupMap.keys())
+            keys = sorted(keys)
+            genotype = keys[-1][0]
+            ix = int(genotype)
+            if len(alt_split) >= ix:
+                alt = alt_split[ix-1]
+                if len(alt) != 1:
+                    return None
+            else:
+                return None
+        lookupMap = self._create_set_(fields[self.LYR_START_IX:self.LYR_END_IX])
+        lyr = self._get_lyr_allele_(lookupMap)
+        return [fields[self.CHR_IX],fields[self.POS_IX],fields[self.REF_IX],alt,lyr,genotype,fields[self.INFO_IX]]
+
+
+
+    def _create_set_(self,fields):
+        lookupMap = {}
+        for item in fields:
+            sep = item[1]
+            isValid = False
+            if sep == '|':
+                isValid = True
+            elif sep == '/':
+                if item[0] != '.' and item[2] != '.':
+                    isValid = True
+            if not isValid:
+                continue
+            genotype = item[0]+item[2]
+            lookupMap[genotype] = True
+        return lookupMap
+
+    def _get_lyr_allele_(self,lookupMap):
+        size = len(lookupMap)
+        if size == 2:
+            return 'S'
+        elif size == 1:
+            if self.DOUBLE_REF in lookupMap:
+                return '0'
+            if self.DOUBLE_ALT in lookupMap:
+                return '1'
+            if self.REF+self.ALT in lookupMap:
+                return 'S'
+            if self.ALT+self.REF in lookupMap:
+                return 'S'
+        return 'NA'
 
 
 
@@ -824,21 +937,18 @@ class GetFilterStats(Parser):
 
 
 
-if __name__ == "__main__":
-    import select
-    import time
-
-
+def get_argparser():
     argparser = argparse.ArgumentParser(description="Parse a Variant Call Format (VCF) file.",
                                                                                  add_help=False)
 
 
     argparser.add_argument("--variant",'-V', type = argparse.FileType('r'),
-                                default = '-', help="Input vcf filepath.")
-    
+                                #default = '-',
+                                 help="Input vcf filepath.")
+
     argparser.add_argument("--parser",'-P', choices = subparsers.choices.keys(),
                                                                 help="Subparser to be used.")
-    
+
     argparser.add_argument("--intervals",'-L', nargs='*', dest='intervals', action='append',
                             help='Specify intervals to consider e.g. Chr1:1-50000. '
                                  'Input vcf must be compressed with bgzip and indexed '
@@ -874,12 +984,11 @@ if __name__ == "__main__":
                                                      help="Print help message and exit.")
 
 
+    return argparser
+
+def parse_args(argparser):
     args, unknown = argparser.parse_known_args()
 
-    
-    logger.setLevel(getattr(logging,args.logging_level))
-
- 
     if args.help:
         help_str = "\n"+argparser.format_help()
         logger.setLevel(logging.INFO)
@@ -903,8 +1012,16 @@ if __name__ == "__main__":
     if args.variant is None:
         argparser.error("argument --variant/-V is required")
 
-    sub_args = subargparser.parse_args(unknown)
+    #if args.variant is sys.stdin:
+    #    logging.warning("argument --variant/-V not supplied, trying to read from stdin")
 
+    sub_args = subargparser.parse_args(unknown)
+    return args, sub_args
+
+def parse(args,sub_args):
+    import select
+    import time
+    logger.setLevel(getattr(logging,args.logging_level))
     if args.intervals is not None:
         args.intervals = [a for b in args.intervals for a in b]
 
@@ -913,10 +1030,7 @@ if __name__ == "__main__":
     except TypeError: #the above check does not work for tabix
         pass
 
-
-
-
-    parser_class = globals()[args.parser]
+    parser_class = parser_classes[args.parser]
     parser = parser_class(**{arg:getattr(sub_args,arg) for arg in vars(sub_args)})
 
     if args.intervals is None:
@@ -943,13 +1057,35 @@ if __name__ == "__main__":
                                                                                                     ncpus=args.ncpus,
                                                     skip_multiple_entries=args.skip_multiple_entries,
                                                     progress_report_interval=args.progress_report_interval)
-    logging.info("Using Walker {}".format(walker.__class__.__name__))
+    logging.info("Using {} to traverse the file.".format(walker.__class__.__name__))
 
     start = time.time()
     walker.run()
     end = time.time()
     delta = end - start
     logging.info("This run took {} seconds = {} minutes = {} hours.".format(delta,delta/60.,delta/3600.))
+
+
+
+def main():
+    argparser = get_argparser()
+    args, sub_args = parse_args(argparser)
+    try:
+        parse(args,sub_args)
+        return 0
+    except KeyboardInterrupt:
+        ### handle keyboard interrupt ###
+        return 0
+    except Exception, e:
+        logging.exception(e)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+
+
 
 
 

@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 
 
-import vcf_parser_def as vp
+import vcf_parser_dev as vp
 
 
 class TestParse(vp.Parser):
     pass
 
-print vp.subparsers
+vp.main()
+
