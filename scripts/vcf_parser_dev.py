@@ -219,7 +219,6 @@ class SerialWalker(Walker):
     since pytabix does the line splitting automatically.
     """
     def __init__(self,in_fh,parser,intervals,auto_tabix=False, **kwa):
-        auto_tabix = True #DEV
         super(SerialWalker, self).__init__(in_fh, parser, **kwa)
         self.intervals = intervals
         self.tabix_fh = tabix.open(self.in_fh.name)
@@ -243,7 +242,7 @@ class SerialWalker(Walker):
                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                             out, err = p.communicate()
                             if p.returncode != 0:
-                                print err
+                                logging.error(err)
                                 raise e
                             name  = base
                             logging.warning("Trying to compress. This can take a while.")
@@ -257,7 +256,7 @@ class SerialWalker(Walker):
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                         out, err = p.communicate()
                         if p.returncode != 0:
-                            print err
+                            logging.error(err)
                             raise
                         logging.warning("Trying to index file. This can take a while.")
                         self.in_fh = gzip.open(name+'.gz')
@@ -265,7 +264,7 @@ class SerialWalker(Walker):
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                         out, err = p.communicate()
                         if p.returncode != 0:
-                            print err
+                            logging.error(err)
                             raise
                     else:
                         logging.error("Reindexing failed with unhandeled error: {}".format(err))
@@ -280,10 +279,9 @@ class SerialWalker(Walker):
                 logging.info("Auto-tabix successful.")
             else:
                 logging.error("Is file compressed with bgzip and does it have tabix index? "
-                                " If not, produce it or run with auto_tabix=True.")
+                                " If not, produce it or run with flag/argument auto_tabix.")
                 logging.error("Is the interval {} in the vcf? ".format(intervals[0]))
                 raise e
-        print self.in_fh.name
 
 
     def _query_tabix(self,interval):
@@ -362,7 +360,7 @@ class MultiRegionParallelWalker(SerialWalker):
     def reduce(self):
         if self.parser.reduce_fun is not None:
             logging.info("Starting reduce step.")
-            self.parser.reduce_fun([s.parser for s in self.subwalkers])
+            self.parser.reduce_fun([p for p in self.subparsers])
         else:
             logging.warning("No reduce function given. Won't do anything.")
 
@@ -371,14 +369,17 @@ class MultiRegionParallelWalker(SerialWalker):
         while self.temp_files:
             os.remove(self.temp_files.pop().name)
 
+    #@staticmethod
     def run_parser(self,i):
         self.subwalkers[i].run_no_output()
+        return self.subwalkers[i].parser
 
     def run(self):
         self.parse_header()
         self.set_ncpus()
         self.setup_subwalkers()
-        parmap(self.run_parser,range(len(self.subwalkers)))
+        subparsers = parmap(self.run_parser,range(len(self.subwalkers)))
+        self.subparsers = subparsers
         self.reduce()
         logging.info("Creating output.")
         self.output()
@@ -446,216 +447,9 @@ class SingleRegionParallelWalker(MultiRegionParallelWalker):
         intervals = [(self.chrom,s,e) for s,e in zip(starts,[s-1 for s in starts[1:]]+[self.end])]
         return intervals
 
-
-##------Parsers---------
-
-
-
-
-
-temp_parser = argparse.ArgumentParser()
-
-subparsers = temp_parser.add_subparsers(dest='parser')
-
-class MetaParser(type):
-    """
-    This meta-class handles the creation of subparsers
-    for each new parser class on class definition.
-    """
-    def __new__(cls, clsname, bases, attrs):
-        newclass = super(MetaParser, cls).__new__(cls, clsname, bases, attrs)
-        if clsname != 'Parser':
-            
-            new_subparser = subparsers.add_parser(clsname,description=newclass.__doc__)
-            args = getattr(newclass,'args')
-            if args is not None:
-                newclass.line_write_attrs = []
-                newclass.line_read_attrs = []
-                for arg, pars in args.iteritems():
-                    new_subparser.add_argument("--"+arg,**pars)
-                    #if argument is a file open in write/read mode 
-                    #and it is used in parse_fun --> add it to line_write_attr/ line_read_attrs
-                    try:
-                        t = pars['type']
-                        try:
-                            mode = t._mode
-                        except AttributeError:
-                            try:
-                                mode = t.mode
-                            except AttributeError:
-                                continue
-                        if  newclass.parse_fun is not None:
-                            parse_code = inspect.getsource(newclass.parse_fun)
-                            if arg in parse_code:
-                                if mode == 'w':
-                                    newclass.line_write_attrs.append(arg)
-                                elif mode == 'r':
-                                    newclass.line_read_attrs.append(arg)
-                                else:
-                                    logging.warning("Arg {} of parser class {} has _mode or mode "
-                                                    "attribute but mode is not 'w' or 'r'. "
-                                                    "This will cause problems if there is any read or write "
-                                                    " happening in within the parse method.".format(arg,clsname))
-                    except KeyError:
-                        pass
-
-            #Add original Parser init to Child init.
-            def parserinit(init):
-                def newinit(self,**kwa):
-                    Parser.__init__(self,**kwa)
-                    init(self,**kwa)
-                return newinit
-            setattr(newclass,'__init__',parserinit(newclass.__init__))
-        return newclass
-
-
-
-
-class Parser(object):
-    """
-    This is the basic parser object.
-    Not to be used directly.
-    All parsing tools should derive from this class.
-    Parsing tools are supplied to a walker
-    to be used to parse the lines of the file.
-    """
-    __metaclass__ = MetaParser
-    args = None
-    def __init__(self,**kwa):
-        known_args = self.__class__.args if self.__class__.args is not None else {}
-        for arg in kwa:
-            assert arg in known_args, ("Unknown argument {},"
-                                       "possible args are {}".format(arg,known_args.keys()))
-        #this is not really necessary, but useful if line_write_attr are changed in instance
-        #self.line_write_attrs = copy.copy(self.__class__.line_write_attrs)
-        #self.line_read_attrs = copy.copy(self.__class__.line_read_attrs)
-        for arg in known_args:
-            try:
-                a = kwa[arg]
-                if a is None:
-                    try:
-                        nargs = known_args[arg]['nargs']
-                        if nargs in ['*','+']:
-                            a = []
-                    except KeyError:
-                        pass
-            except KeyError:
-                try:
-                    a = known_args[arg]['default']
-                except KeyError:
-                    req = False
-                    try:
-                        if known_args[arg]['required']:
-                            req = True
-                    except KeyError:
-                        pass
-                    if not req:
-                        a = None
-                        try:
-                            nargs = known_args[arg]['nargs']
-                            if nargs in ['*','+']:
-                                a = []
-                        except KeyError:
-                            pass
-                    else:
-                        raise TypeError("Argument {} not supplied but required.".format(arg))
-                logging.info("Argument {} not supplied, using default {}.".format(arg,a))
-            setattr(self,arg,a)
-            ##ATTENTION, if code in for loop is added here,
-            ##          beware of the continue in the try statement above
-    
-    header_fun = None
-    parse_fun = None
-    cleanup_fun = None
-    output_fun = None
-
-
-class VCFTo012(Parser):
-    """
-    Extract genotype information into a tsv file.
-    Coding 0 for homozygous reference, 1 for heterozygote
-    and 2 for homozygous alternative allele.
-    Missing genotypes are coded by 'N'
-    """
-    args ={
-        'out_tsv':
-            {'required':True,
-             'type':argparse.FileType('w'),
-             'help':"File path to write output tsv to."}
-        }
-
-    def header_fun(self,line):
-        if line[1:6] == "CHROM":
-            self.out_tsv.write("chrom\tpos\t"+line.split("\t",9)[-1])
-
-    def parse_fun(self,sline):
-        gt = map(get_012,sline[9:])
-        self.out_tsv.write("\t".join(sline[:2])+"\t"+"\t".join(gt)+"\n")
-
-    def reduce_fun(self,selfs):
-        command = ["cat"]+[s.out_tsv.name for s in selfs]
-        p = subprocess.Popen(command, stdout=self.out_tsv)
-        p.communicate()
-
-
-
-class FilterByBed(Parser):
-    """
-    Add filter tag to sites in intervals of bed file.
-    """
-    args = {'in_beds':
-                      {'required':True,
-                       'nargs':'+','type':argparse.FileType('r'),
-                       'help':"List of filepathes to the input beds."},
-            'filter_names':{'required':True,'nargs':'+',
-                            'help':'Filter names corresponding to beds.'},
-            'out_vcf':{'required':True,
-                       'type':argparse.FileType('w'),
-                       'help':'Filepath to output vcf.'}
-            }
-    def __init__(self,**kwa):
-        #print self.in_beds
-        #print self.filter_names
-        assert len(self.filter_names)==len(self.in_beds), \
-                       "There must be as many filter names as beds."
-        self.last_rec = [None for _ in self.in_beds]
-        self.seen_chroms = set()
-
-    def header_fun(self,line):
-        self.out_vcf.write(line)
-
-    def parse_fun(self,sline):
-        def get_rec(fh):
-            rec = fh.next().strip().split()
-            rec[1] = int(rec[1])
-            rec[2] = int(rec[2])
-            return rec
-        ref = sline[3]
-        alt = sline[4].split(',')
-        pos = int(sline[1])
-        chrom = sline[0]
-        self.seen_chroms.update((chrom,))
-        for i in range(len(self.last_rec)):
-            while self.last_rec[i] is None \
-                    or (self.last_rec[i][0]!=chrom and self.last_rec[i][0] in self.seen_chroms) \
-                                             or (self.last_rec[i][0]==chrom and self.last_rec[i][2]<pos):
-                try:
-                    self.last_rec[i] = get_rec(self.in_beds_fh[i])
-                except StopIteration:
-                    break
-            if self.last_rec[i][0] == chrom \
-                and self.last_rec[i][1] < pos \
-                and self.last_rec[i][2] + 1 > pos:
-                if sline[6] in ['.','PASS']:
-                    sline[6] = self.filter_names[i]
-                else:
-                    sline[6] = sline[6] + ','  + self.filter_names[i]
-        self.out_vcf_fh.write("\t".join(sline)+'\n')
-
-
+#--------------SUPPORT FUNCTIONS-------------------------
 
 #parallel support
-
 
 def fun(f,q_in,q_out):
     while True:
@@ -725,6 +519,259 @@ def sum_countdics(countdics):
 
 def get_info_dic(line):
     return {k:v for (k,v) in [t.split('=') for t in line[7].split(';')]}
+
+##--------------------Parsers-----------------------
+
+
+void_parser = argparse.ArgumentParser()
+subparsers = void_parser.add_subparsers(dest='parser')
+
+class MetaParser(type):
+    """
+    This meta-class handles the creation of subparsers
+    for each new parser class on class definition.
+    """
+    def __new__(cls, clsname, bases, attrs):
+        newclass = super(MetaParser, cls).__new__(cls, clsname, bases, attrs)
+        if clsname != 'Parser':
+            new_subparser = subparsers.add_parser(clsname, description=newclass.__doc__)
+            args = getattr(newclass,'args')
+            if args is not None:
+                newclass.line_write_attrs = []
+                newclass.end_write_attrs = []
+                newclass.line_read_attrs = []
+                for arg, pars in args.iteritems():
+                    new_subparser.add_argument("--"+arg,**pars)
+                    #if argument is a file open in write/read mode 
+                    #and it is used in parse_fun --> add it to line_write_attr/ line_read_attrs
+                    try:
+                        t = pars['type']
+                        try:
+                            mode = t._mode
+                        except AttributeError:
+                            try:
+                                mode = t.mode
+                            except AttributeError:
+                                continue
+                        if  newclass.parse_fun is not None:
+                            parse_code = inspect.getsource(newclass.parse_fun)
+                            if arg in parse_code:
+                                if mode == 'w':
+                                    newclass.line_write_attrs.append(arg)
+                                elif mode == 'r':
+                                    newclass.line_read_attrs.append(arg)
+                                else:
+                                    logging.warning("Arg {} of parser class {} has _mode or mode "
+                                                    "attribute but mode is not 'w' or 'r'. "
+                                                    "This will cause problems in parallel mode "
+                                                    "if there is any read or write "
+                                                    "happening within the parse method.".format(arg,clsname))
+                            #check for files that are written in the end
+                            elif mode == 'w' and newclass.output_fun is not None:
+                                parse_code = inspect.getsource(newclass.output_fun)
+                                if arg in parse_code:
+                                    newclass.end_write_attrs.append(arg)
+                    except KeyError:
+                        pass
+
+            #Add original Parser init to Child init.
+            def parserinit(init):
+                def newinit(self,**kwa):
+                    Parser.__init__(self,**kwa)
+                    init(self,**kwa)
+                return newinit
+            setattr(newclass,'__init__',parserinit(newclass.__init__))
+        return newclass
+
+
+class Parser(object):
+    """
+    This is the basic parser object.
+    Not to be used directly.
+    All parsing tools should derive from this class.
+    Parsing tools are supplied to a walker
+    to be used to parse the lines of the file.
+    """
+    __metaclass__ = MetaParser
+    args = None
+    def __init__(self,**kwa):
+        known_args = self.__class__.args if self.__class__.args is not None else {}
+        for arg in kwa:
+            assert arg in known_args, ("Unknown argument {},"
+                                       "possible args are {}".format(arg,known_args.keys()))
+        #this is not really necessary, but useful if line_write_attr are changed in instance
+        self.line_write_attrs = copy.copy(self.__class__.line_write_attrs)
+        self.end_write_attrs = copy.copy(self.__class__.end_write_attrs)
+        self.line_read_attrs = copy.copy(self.__class__.line_read_attrs)
+        for arg in known_args:
+            try:
+                a = kwa[arg]
+                if a is None:
+                    try:
+                        nargs = known_args[arg]['nargs']
+                        if nargs in ['*','+']:
+                            a = []
+                    except KeyError:
+                        pass
+            except KeyError:
+                try:
+                    a = known_args[arg]['default']
+                    logging.info("Argument {} not supplied, using default {}.".format(arg,a))
+                except KeyError:
+                    req = False
+                    try:
+                        if known_args[arg]['required']:
+                            req = True
+                    except KeyError:
+                        pass
+                    if not req:
+                        a = None
+                        try:
+                            nargs = known_args[arg]['nargs']
+                            if nargs in ['*','+']:
+                                a = []
+                        except KeyError:
+                            pass
+                    elif arg in self.end_write_args:
+                        a = None
+                        logging.info("Argument {} not supplied. It looks like a file that is used for final output. "
+                                     "Setting it None and assuming that method output_fun is returning to variable. ")
+                    else:
+                        raise TypeError("Argument {} not supplied but required.".format(arg))
+            setattr(self,arg,a)
+    header_fun = None
+    parse_fun = None
+    cleanup_fun = None
+    output_fun = None
+
+
+class VCFTo012(Parser):
+    """
+    Extract genotype information into a tsv file.
+    Coding 0 for homozygous reference, 1 for heterozygote
+    and 2 for homozygous alternative allele.
+    Missing genotypes are coded by 'N'
+    """
+    args ={
+        'out_tsv':
+            {'required':True,
+             'type':argparse.FileType('w'),
+             'help':"File path to write output tsv to."}
+        }
+
+    def header_fun(self,line):
+        if line[1:6] == "CHROM":
+            self.out_tsv.write("chrom\tpos\t"+line.split("\t",9)[-1])
+
+    def parse_fun(self,sline):
+        gt = map(get_012,sline[9:])
+        self.out_tsv.write("\t".join(sline[:2])+"\t"+"\t".join(gt)+"\n")
+
+    def reduce_fun(self,selfs):
+        command = ["cat"]+[s.out_tsv.name for s in selfs]
+        p = subprocess.Popen(command, stdout=self.out_tsv)
+        p.communicate()
+
+
+
+class FilterByBed(Parser):
+    """
+    Add filter tag to sites in intervals of bed file.
+    """
+    args = {'in_beds':
+                      {'required':True,
+                       'nargs':'+','type':argparse.FileType('r'),
+                       'help':"List of filepathes to the input beds."},
+            'filter_names':{'required':True,'nargs':'+',
+                            'help':'Filter names corresponding to beds.'},
+            'out_vcf':{'required':True,
+                       'type':argparse.FileType('w'),
+                       'help':'Filepath to output vcf.'}
+            }
+    def __init__(self,**kwa):
+        assert len(self.filter_names)==len(self.in_beds), \
+                       "There must be as many filter names as beds."
+        self.last_rec = [None for _ in self.in_beds]
+        self.seen_chroms = set()
+
+    def header_fun(self,line):
+        self.out_vcf.write(line)
+
+    def parse_fun(self,sline):
+        def get_rec(fh):
+            rec = fh.next().strip().split()
+            rec[1] = int(rec[1])
+            rec[2] = int(rec[2])
+            return rec
+        ref = sline[3]
+        alt = sline[4].split(',')
+        pos = int(sline[1])
+        chrom = sline[0]
+        self.seen_chroms.update((chrom,))
+        for i in range(len(self.last_rec)):
+            while self.last_rec[i] is None \
+                    or (self.last_rec[i][0]!=chrom and self.last_rec[i][0] in self.seen_chroms) \
+                                             or (self.last_rec[i][0]==chrom and self.last_rec[i][2]<pos):
+                try:
+                    self.last_rec[i] = get_rec(self.in_beds_fh[i])
+                except StopIteration:
+                    break
+            if self.last_rec[i][0] == chrom \
+                and self.last_rec[i][1] < pos \
+                and self.last_rec[i][2] + 1 > pos:
+                if sline[6] in ['.','PASS']:
+                    sline[6] = self.filter_names[i]
+                else:
+                    sline[6] = sline[6] + ','  + self.filter_names[i]
+        self.out_vcf_fh.write("\t".join(sline)+'\n')
+
+
+class GetFilterStats(Parser):
+    """
+    Count occurences of all combinations
+    of filters in the filter column.
+    """
+    args = {'out_fn':{'required':True,
+                      'type':argparse.FileType('w'),
+                      'help':"Filename to write to."}}
+
+    def __init__(self,**kwa):
+        try:
+            pd
+        except NameError, e:
+            logging.error("{} required python pandas, but it seems not to be imported.")
+            raise e
+        self.count_dic = {}
+
+    def parse_fun(self,sline):
+        filters = sline[6].split(';')
+        filters.sort()
+        filters = tuple(filters)
+        add_to_countdic(self.count_dic,'n_sites')
+        add_to_countdic(self.count_dic,filters)
+
+    def cleanup_fun(self):
+        filter_info = pd.Series(self.count_dic.values(),
+                                    index=self.count_dic.keys())
+        filter_info.sort(inplace=True,ascending=False)
+        self.filter_info = filter_info
+
+    def reduce_fun(self,selfs):
+        fi = selfs[0].filter_info
+        for ad in selfs[1:]:
+            fi = fi.add(ad.filter_info, fill_value=0)
+        self.filter_info = fi
+
+    def output_fun(self):
+        if self.out_fn is not None:
+            self.filter_info.to_csv(self.out_fn,sep='\t')
+        else:
+            return self.filter_info
+
+
+
+
+
 
 
 
@@ -814,15 +861,6 @@ if __name__ == "__main__":
     except TypeError: #the above check does not work for tabix
         pass
 
-#    extension = os.path.splitext(args.variant.name)[-1]
-#    if extension == '.gz':
-#        args.variant = gzip.open(args.variant.name)
-#    else:
-#        assert not args.intervals,("Interval mode (-L) only supported on bgzipped "
-#                             "files with tabix index. But input has not ending .gz")
-#        if  extension != '.vcf':
-#            logging.warning("Unrecognized file extension. "
-#                            "Assuming this is a vcf: {}".format(args.variant.name))
 
 
 
