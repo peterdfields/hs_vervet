@@ -68,11 +68,17 @@ class Walker(object):
             logging.info("in_fh has no .read method. Assuming it is a filepath string.")
             extension = os.path.splitext(in_fh)[-1]
             if extension in ['.gz','.bgz']:
+                #logging.info()
                 in_fh = gzip.open(eu(in_fh))
             else:
-                logging.warning("Unrecognized file extension. "
-                                "Assuming this is a vcf: {}".format(in_fh))
+                #logging.warning("Unrecognized file extension. "
+                #                "Assuming this is a vcf: {}".format(in_fh))
                 in_fh = open(eu(in_fh))
+        else:
+            extension = os.path.splitext(in_fh.name)[-1]
+            if extension in ['.gz','.bgz']:
+                #logging.info()
+                in_fh = gzip.open(eu(in_fh.name))
         self.in_fh = in_fh
         self.sep = sep
         self.parser = parser
@@ -633,10 +639,59 @@ class Parser(object):
                     else:
                         raise TypeError("Argument {} not supplied but required.".format(arg))
             setattr(self,arg,a)
+            #
+            for attr in self.line_write_attrs:
+                fh = getattr(self,attr)
+                if not hasattr(fh, 'write'):
+                    logging.info("{} has no .write method. Assuming it is a filepath string: {}.".format(attr,fh))
+                    fh = open(eu(fh),'w')
+                base, extension = os.path.splitext(fh.name)
+                if extension in ['.gz','.bgz']:
+                    logging.info("{} ends in {}, compressing with tabix on the fly.".format(attr, extension))
+                    base1, ext1 = os.path.splitext(base)
+                    if ext1 and ext1[1:] in ['gff', 'bed', 'sam', 'vcf', 'psltbl', 'gvcf']:
+                        logging.info("{} has ending {}, supposing that it is reference ordered data."
+                                                                        " Will create tabix index.".format(attr,ext1))
+                        index = 'vcf' if ext1 == 'gvcf' else ext1
+                    else:
+                        index = False
+                    setattr(self,attr,TabixWrite(fh,index))
     header_fun = None
     parse_fun = None
     cleanup_fun = None
     output_fun = None
+
+class TabixWrite(object):
+    def __init__(self,fh, index):
+        #idea: inherit all attributes from fh?
+        self.fh = fh
+        self.name = self.fh.name
+        bgzip = subprocess.Popen(['bgzip','-c'], stdin=subprocess.PIPE, stdout=fh,stderr=subprocess.PIPE)
+        self.bgzip = bgzip
+        self.index = index
+        
+
+    def write(self,string):
+        self.bgzip.stdin.write(string)
+
+    def flush(self):
+        self.bgzip.stdin.flush()
+
+    def close(self):
+        self.bgzip.stdin.close()
+        out, err = self.bgzip.communicate()
+        if self.bgzip.returncode:
+            logging.error("Failed to bgzip {}: {}".format(fh.name, err))
+            raise IOError
+        if self.index:
+            tabix = subprocess.Popen(['tabix','-p',self.index,self.fh.name],stderr=subprocess.PIPE)
+            out, err = tabix.communicate()
+            if self.bgzip.returncode:
+                logging.warning("Failed to create tabix index for {}: {}".format(fh.name, err))
+
+#class TabixFile(file):
+#    def __init__(self, *args):
+#        file.__init__(self, *args)
 
 
 class VCFTo012(Parser):
@@ -707,7 +762,7 @@ class FilterByBed(Parser):
                     or (self.last_rec[i][0]!=chrom and self.last_rec[i][0] in self.seen_chroms) \
                                              or (self.last_rec[i][0]==chrom and self.last_rec[i][2]<pos):
                 try:
-                    self.last_rec[i] = get_rec(self.in_beds_fh[i])
+                    self.last_rec[i] = get_rec(self.in_beds[i])
                 except StopIteration:
                     break
             if self.last_rec[i][0] == chrom \
@@ -717,7 +772,7 @@ class FilterByBed(Parser):
                     sline[6] = self.filter_names[i]
                 else:
                     sline[6] = sline[6] + ','  + self.filter_names[i]
-        self.out_vcf_fh.write("\t".join(sline)+'\n')
+        self.out_vcf.write("\t".join(sline)+'\n')
 
 
 class GetFilterStats(Parser):
@@ -779,7 +834,7 @@ if __name__ == "__main__":
                                                                                  add_help=False)
 
 
-    argparser.add_argument("--variant",'-V',required=True, type = argparse.FileType('r'),
+    argparser.add_argument("--variant",'-V', type = argparse.FileType('r'),
                                 default = '-', help="Input vcf filepath.")
     
     argparser.add_argument("--parser",'-P', choices = subparsers.choices.keys(),
@@ -805,7 +860,7 @@ if __name__ == "__main__":
                                        '2) If multiple intervals are specified, '
                                        'we parallelise across intervals. \n'
                                        'Parallel parsing is not implemented for all '
-                                       'analyses.')
+                                       'parsers.')
     argparser.add_argument("--skip_multiple_entries",action='store_true',
                          help='Skip all but the first entry for the same site in the VCF.')
     argparser.add_argument('--logging_level','-l',
@@ -846,6 +901,8 @@ if __name__ == "__main__":
        logging.info(help_str)
        sys.exit(0)
 
+    if args.variant is None:
+        argparser.error("argument --variant/-V is required")
 
     sub_args = subargparser.parse_args(unknown)
 
