@@ -181,8 +181,6 @@ class Walker(object):
             logging.info("Starting cleanup.")
             self.parser.cleanup_fun()
         for a in self.parser.line_write_attrs:
-            #to be sure that header is written before body
-            #personally I find duck-typing dangerous...
             try:
                 getattr(self.parser,a).close()
             except AttributeError:
@@ -219,12 +217,19 @@ class SerialWalker(Walker):
     def __init__(self,in_fh,parser,intervals,auto_tabix=False, **kwa):
         super(SerialWalker, self).__init__(in_fh, parser, **kwa)
         self.intervals = intervals
+        self.auto_tabix = auto_tabix
+        self._tabix_init()
+
+    def _tabix_init(self):
         self.tabix_fh = tabix.open(self.in_fh.name)
+        self._check_tabix()
+
+    def _check_tabix(self):
         try:
-            self._query_tabix(intervals[0])
+            self._query_tabix(self.intervals[0])
         except tabix.TabixError, e:
             logging.warning("Tabix raised error: {}".format(str(e)))
-            if auto_tabix:
+            if self.auto_tabix:
                 logging.warning("Trying to (re-)index file. This can take a while.")
                 p = subprocess.Popen(['tabix','-p','vcf','-f',self.in_fh.name],
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -244,7 +249,6 @@ class SerialWalker(Walker):
                                 raise e
                             name  = base
                             logging.warning("Trying to compress. This can take a while.")
-    
                         else:
                             logging.warning("File seems not to be compressed with bgzip. "
                                              "Trying to compress. This can take a while.")
@@ -272,13 +276,13 @@ class SerialWalker(Walker):
                     self._query_tabix(intervals[0])
                 except tabix.TabixError, e:
                     logging.error("Failed to auto-tabix input file.")
-                    logging.error("Is the interval {} in the vcf? ".format(intervals[0]))
+                    logging.error("Is the interval {} in the vcf? ".format(self.intervals[0]))
                     raise e
                 logging.info("Auto-tabix successful.")
             else:
                 logging.error("Is file compressed with bgzip and does it have tabix index? "
                                 " If not, produce it or run with flag/argument auto_tabix.")
-                logging.error("Is the interval {} in the vcf? ".format(intervals[0]))
+                logging.error("Is the interval {} in the vcf? ".format(self.intervals[0]))
                 raise e
 
 
@@ -289,11 +293,11 @@ class SerialWalker(Walker):
             try:
                 return self.tabix_fh.query(*interval)
             except TypeError, e:
-                logging.error("Chromosome must be string and position integer."
+                logging.error("Interval: {}: Chromosome must be string and position integer."
                                                " e.g. ('Chr1',1000000,1005000). "
-                                "Alternatively use string 'Chr:1000000-1005000'")
+                                "Alternatively use string 'Chr:1000000-1005000'".format(interval))
                 raise e
-            except tabix.TabixError:
+            except tabix.TabixError, e:
                 logging.error("Is the interval {} in the vcf? ".format(interval))
                 raise e
 
@@ -319,83 +323,135 @@ class SerialWalker(Walker):
         logging.info("Run finished.")
 
 
-class MultiRegionParallelWalker(SerialWalker):
-    def __init__(self, in_fh, parser, intervals,
-                            ncpus='auto', tmp_dir='.',**kwa):
-        super(MultiRegionParallelWalker, self).__init__(in_fh,parser,intervals,**kwa)
-        assert hasattr(self.parser,'reduce_fun'), ("Parser {} has no reduce_fun method. "
-                                                 "No support for parallel execution.")
+#class MultiRegionParallelWalker(SerialWalker):
+#    def __init__(self, in_fh, parser, intervals,
+#                            ncpus='auto', tmp_dir='.',**kwa):
+#        super(MultiRegionParallelWalker, self).__init__(in_fh,parser,intervals,**kwa)
+#        assert hasattr(self.parser,'reduce_fun'), ("Parser {} has no reduce_fun method. "
+#                                                 "No support for parallel execution.")
+#        if self.parser.reduce_fun is None:
+#            logging.warning("Reduce function is None. Is this really intended?")
+#        self.kwa = kwa
+#        if ncpus == 'auto':
+#            ncpus = mp.cpu_count()
+#        self.ncpus = ncpus
+#        self.tmp_dir = os.path.expanduser(tmp_dir)
+#
+#    def set_ncpus(self):
+#        self.ncpus = min(len(self.intervals),self.ncpus)
+#        logging.info("{} regions specified.  Parallelising by region. "
+#                     "Using {} processes.".format(len(self.intervals),self.ncpus))
+#
+#    def setup_subwalkers(self):
+#        subwalkers = []
+#        temp_fns = []
+#        for i,interval in enumerate(self.intervals):
+#            subparser = copy.deepcopy(self.parser)
+#            subparser.header_fun = None #don't parse header in subparser
+#            parse_source = inspect.getsource(subparser.parse_fun)
+#            for a in subparser.line_write_attrs:
+#                tmp_fn = jn(self.tmp_dir,a+'_'+str(uuid.uuid4()) + \
+#                                         "_" + str(i) + ".tmp")
+#                temp_fns.append(tmp_fn)
+#                setattr(subparser,a+'_fn',tmp_fn)
+#            subwalkers.append(SerialWalker(self.in_fh, subparser, [interval],
+#                                         id="Interval {}:".format(interval), **self.kwa))
+#        self.subwalkers = subwalkers
+#        self.temp_fns = temp_fns
+#
+#    def reduce(self):
+#        if self.parser.reduce_fun is not None:
+#            logging.info("Starting reduce step.")
+#            print [p.out_tsv for p in self.subparsers]
+#            self.parser.reduce_fun([p for p in self.subparsers])
+#        else:
+#            logging.warning("No reduce function given. Won't do anything.")
+#
+#    def del_temp_files(self):
+#        logging.info("Removing temp files.")
+#        while self.temp_fns:
+#            os.remove(self.temp_fns.pop())
+#
+#    def run_parser(self,i):
+#        s = self.subwalkers[i]
+#        for a in s.parser.line_write_attrs:
+#            setattr(s.parser,a,open(getattr(s.parser,a+'_fn'),'w'))
+#        s.run_no_output()
+#        return s.parser
+#
+#    def run(self):
+#        self.parse_header()
+#        self.set_ncpus()
+#        self.setup_subwalkers()
+#        subparsers = parmap(self.run_parser,range(len(self.subwalkers)),self.ncpus)
+#        #this is a hacky solution acconting for the fact that open files cannot be
+#        #pickled and sent to the child processes by multiprocessing
+#        for p in subparsers:
+#            for a in p.line_write_attrs:
+#                setattr(p,a,open(getattr(p,a+'_fn'),'a'))
+#        self.subparsers = subparsers
+#        self.reduce()
+#        logging.info("Creating output.")
+#        self.output()
+#        self.del_temp_files()
+#        logging.info("Run finished.")
+
+
+class ParallelWalker(SerialWalker):
+    """
+    chunk ...        if chunk is False, intervals are not divided into chunks, i.e.,
+                     multiprocessing runs with min(ncpus,len(intervals))
+    chunk_factor ... Multiply ncpus by this factor to get the number of chunks.
+                     Larger value will imply overhead,
+                     but helps to use all processors if some chromosomes are very short.
+    """
+    def __init__(self, in_fh, parser, intervals=None, ncpus='auto', auto_tabix=False,
+                                                            tmp_dir='.',chunk=True,
+                                                             chunk_factor=2, **kwa):
+        if intervals is None:
+            #setup without any interval specific things
+            super(SerialWalker, self).__init__(in_fh, parser, **kwa)
+            self.intervals = None
+            self.auto_tabix = auto_tabix
+        else:
+            super(ParallelWalker, self).__init__(in_fh, parser,intervals, **kwa)
+        self.chunk = chunk
+        assert hasattr(self.parser,'reduce_fun'), \
+                                            ("Parser {} has no reduce_fun method. "
+                                             "No support for parallel execution."\
+                                                .format(self.parser.__class__.__name__))
         if self.parser.reduce_fun is None:
             logging.warning("Reduce function is None. Is this really intended?")
         self.kwa = kwa
         if ncpus == 'auto':
             ncpus = mp.cpu_count()
         self.ncpus = ncpus
-        self.tmp_dir = tmp_dir
-
-    def set_ncpus(self):
-        self.ncpus = min(len(self.intervals),self.ncpus)
-        logging.info("{} regions specified.  Parallelising by region. "
-                     "Using {} processes.".format(len(self.intervals),self.ncpus))
-
-    def setup_subwalkers(self):
-        subwalkers = []
-        temp_files = []
-        for i,interval in enumerate(self.intervals):
-            subparser = copy.deepcopy(self.parser)
-            subparser.header_fun = None #don't parse header in subparser
-            parse_source = inspect.getsource(subparser.parse_fun)
-            for a in subparser.line_write_attrs:
-                tmp_file = open(jn(self.tmp_dir,a+str(uuid.uuid4()) + \
-                                        "_" + str(i) + ".tmp"),'w')
-                temp_files.append(tmp_file)
-                setattr(subparser,a,tmp_file)
-            subwalkers.append(SerialWalker(self.in_fh, subparser, [interval],
-                                         id="Interval {}:".format(interval), **self.kwa))
-        self.subwalkers = subwalkers
-        self.temp_files = temp_files
-
-    def reduce(self):
-        if self.parser.reduce_fun is not None:
-            logging.info("Starting reduce step.")
-            self.parser.reduce_fun([p for p in self.subparsers])
+        self.tmp_dir = os.path.expanduser(tmp_dir)
+        if chunk:
+            self.n_chunks = chunk_factor * self.ncpus
+            self.missing = True
+            if self.intervals is None:
+                self.replace_missing = self.replace_missing_no_interval
+                logging.info("No intervals specificed for parallel parsing. "
+                             "Trying to infer intervals by searching vcf header. "
+                                "Hence, tabix checks will happen at runtime only.")
+            else:
+                self.intervals = [self._parse_interval(i) for i in self.intervals]
+                if not any([i[2] is None for i in self.intervals]):
+                    self.missing = False
+            if self.missing:
+                self._header_line_parser = self._header_line_parser_search_contig_len
         else:
-            logging.warning("No reduce function given. Won't do anything.")
-
-    def del_temp_files(self):
-        logging.info("Removing temp files.")
-        while self.temp_files:
-            os.remove(self.temp_files.pop().name)
-
-    #@staticmethod
-    def run_parser(self,i):
-        self.subwalkers[i].run_no_output()
-        return self.subwalkers[i].parser
-
-    def run(self):
-        self.parse_header()
-        self.set_ncpus()
-        self.setup_subwalkers()
-        subparsers = parmap(self.run_parser,range(len(self.subwalkers)),self.ncpus)
-        self.subparsers = subparsers
-        self.reduce()
-        logging.info("Creating output.")
-        self.output()
-        self.del_temp_files()
-        logging.info("Run finished.")
+            self.ncpus = min(len(self.intervals),self.ncpus)
+            logging.info("Chunking is turned off. {} intervals specified. "
+                                                "Parallelising by region. "
+                     "Using {} processes.".format(len(self.intervals),self.ncpus))
+        self.contic_dic = {}
 
 
-
-class SingleRegionParallelWalker(MultiRegionParallelWalker):
-    def __init__(self, in_fh, parser, intervals, **kwa):
-        assert len(intervals) == 1, ("ParallelSingleRegionWalker requires a "
-                                                           "single interval.")
-        #logging.info("One interval specified, starting single_region_parallel mode with {} cores.".format(ncpus))
-        super(SingleRegionParallelWalker, self).__init__(in_fh, parser, intervals, **kwa)
-        region = intervals[0]
+    def _parse_interval(self,interval):
         try:
-            #self.tabix_fh.querys(region)
-            chrompos = region.split(":")
+            chrompos = interval.split(":")
             chrom = chrompos[0]
             try:
                 startend = chrompos[1].split('-')
@@ -408,44 +464,179 @@ class SingleRegionParallelWalker(MultiRegionParallelWalker):
                 start = None
                 end = None
         except TypeError:
-            chrom = region[0]
-            start = region[1]
-            end = region[2]
-        self.chrom = chrom
-        self.start = start
-        self.end = end
-        if self.start is None:
-            self.start = 0
-        if self.end is None:
-            self._header_line_parser = self._header_line_parser_search_contig_len
-            logging.info("No chromosome end specified, searching for 'contig'"
-                         "tag in vcf header.")
-        self.kwa = kwa
+            chrom = interval[0]
+            start = interval[1]
+            end = interval[2]
+        if start is None:
+            start = 0
+        return [chrom, start, end]
 
-
-    def parse_header(self):
-        super(SingleRegionParallelWalker, self).parse_header()
-        self.intervals = self.get_intervals()
 
     def _header_line_parser_search_contig_len(self,line):
         if line[:9] == '##contig=':
-                    contig_dic = get_header_line_dic(line)
-                    if contig_dic['ID'] == self.chrom:
-                        length = int(contig_dic['length'])
-                        self.end = length
+                    dic = get_header_line_dic(line)
+                    self.contic_dic.update({dic['ID']:int(dic['length'])})
         if self.parser.header_fun is not None:
             self.parser.header_fun(line)
 
-    def get_intervals(self):
-        n_chunks = self.ncpus
-        chunksize = int((self.end-self.start)/n_chunks) + 1
-        starts = []
-        for s in range(self.start,self.end,chunksize):
-            starts.append(s)
-        intervals = [(self.chrom,s,e) for s,e in zip(starts,[s-1 for s in starts[1:]]+[self.end])]
-        return intervals
+    def replace_missing_no_interval(self):
+        logging.info("No intervals given, considering all contigs given in VCF header.")
+        self.intervals = [(k,1,v) for k,v in  self.contic_dic.iteritems()]
+        super(ParallelWalker, self)._tabix_init()
+
+    def replace_missing(self):
+        for interval in self.intervals:
+            if interval[2] is None:
+                interval[2] = self.contic_dic[interval[0]]
+            if interval[1] is None:
+                interval[1] = 1
+
+    def get_chunks(self):
+        chunks = self.intervals
+        while len(chunks) < self.n_chunks:
+            lengths = [i[2]-i[1] for i in chunks]
+            idx = np.argmax(lengths)
+            longest = chunks[idx]
+            midpoint = longest[1]+(longest[2]-longest[1])/2
+            left_chunk = [longest[0],longest[1],midpoint]
+            right_chunk = [longest[0],midpoint+1,longest[2]]
+            chunks[idx] = left_chunk
+            chunks.insert(idx+1,right_chunk)
+        #chunks.sort()
+        logging.debug("Chunks used: {}".format(chunks))
+        return chunks
+
+    def setup_subwalkers(self):
+        subwalkers = []
+        temp_fns = []
+        for i, chunk in enumerate(self.chunks):
+            subparser = copy.deepcopy(self.parser)
+            subparser.header_fun = None #don't parse header in subparser
+            parse_source = inspect.getsource(subparser.parse_fun)
+            for a in subparser.line_write_attrs:
+                tmp_fn = jn(self.tmp_dir,a+'_'+str(uuid.uuid4()) + \
+                                         "_" + str(i) + ".tmp")
+                temp_fns.append(tmp_fn)
+                setattr(subparser,a+'_fn',tmp_fn)
+            subwalkers.append(SerialWalker(self.in_fh, subparser, [chunk],
+                                         id="Chunk {}:".format(chunk), **self.kwa))
+        self.subwalkers = subwalkers
+        self.temp_fns = temp_fns
+
+    def reduce(self):
+        if self.parser.reduce_fun is not None:
+            logging.info("Starting reduce step.")
+            self.parser.reduce_fun([p for p in self.subparsers])
+        else:
+            logging.warning("No reduce function given. Won't do anything.")
+
+    def del_temp_files(self):
+        logging.info("Removing temp files.")
+        while self.temp_fns:
+            os.remove(self.temp_fns.pop())
+
+    def run_parser(self,i):
+        s = self.subwalkers[i]
+        for a in s.parser.line_write_attrs:
+            setattr(s.parser,a,open(getattr(s.parser,a+'_fn'),'w'))
+        s.run_no_output()
+        return s.parser
+
+    def run(self):
+        self.parse_header()
+        #self.set_ncpus()
+        if self.chunk:
+            if self.missing:
+                self.replace_missing()
+            self.chunks = self.get_chunks()
+        else:
+            self.chunks = self.intervals
+        self.setup_subwalkers()
+        subparsers = parmap(self.run_parser,range(len(self.subwalkers)),self.ncpus)
+        #this is a hacky solution acconting for the fact that open files cannot be
+        #pickled and sent to the child processes by multiprocessing
+        for p in subparsers:
+            for a in p.line_write_attrs:
+                setattr(p,a,open(getattr(p,a+'_fn'),'a'))
+        self.subparsers = subparsers
+        self.reduce()
+        logging.info("Creating output.")
+        self.output()
+        self.del_temp_files()
+        logging.info("Run finished.")
+
+#class SingleRegionParallelWalker(MultiRegionParallelWalker):
+#    def __init__(self, in_fh, parser, intervals, **kwa):
+#        assert len(intervals) == 1, ("ParallelSingleRegionWalker requires a "
+#                                                           "single interval.")
+#        #logging.info("One interval specified, starting single_region_parallel mode with {} cores.".format(ncpus))
+#        super(SingleRegionParallelWalker, self).__init__(in_fh, parser, intervals, **kwa)
+#        chrom, start, end = self._parse_interval(intervals[0])
+#        self.contigs
+#
+#    def _parse_interval(self,interval):
+#        try:
+#            chrompos = interval.split(":")
+#            chrom = chrompos[0]
+#            try:
+#                startend = chrompos[1].split('-')
+#                start = int(startend[0])
+#                try:
+#                    end = int(startend[1])
+#                except:
+#                    end = None
+#            except IndexError:
+#                start = None
+#                end = None
+#        except TypeError:
+#            chrom = interval[0]
+#            start = interval[1]
+#            end = interval[2]
+#        if start is None:
+#            start = 0
+#        if end is None:
+#            self._header_line_parser = self._header_line_parser_search_contig_len
+#            logging.info("No chromosome end specified, searching for 'contig'"
+#                         "tag in vcf header.")
+#        return (chrom, start, end)
+#
+#
+#    def parse_header(self):
+#        super(SingleRegionParallelWalker, self).parse_header()
+#        self.intervals = self.get_intervals()
+#
+#    def _header_line_parser_search_contig_len(self,line):
+#        if line[:9] == '##contig=':
+#                    contig_dic = get_header_line_dic(line)
+#                    if contig_dic['ID'] == self.chrom:
+#                        length = int(contig_dic['length'])
+#                        self.end = length
+#        if self.parser.header_fun is not None:
+#            self.parser.header_fun(line)
+#
+#    def get_intervals(self):
+#        n_chunks = self.ncpus
+#        chunksize = int((self.end-self.start)/n_chunks) + 1
+#        starts = []
+#        for s in range(self.start,self.end,chunksize):
+#            starts.append(s)
+#        intervals = [(self.chrom,s,e) for s,e in zip(starts,[s-1 for s in starts[1:]]+[self.end])]
+#        return intervals
+
+
 
 #--------------SUPPORT FUNCTIONS-------------------------
+
+def get_walker(in_fh,parser,intervals=None,ncpus=None,**kwa):
+    if ncpus is None or ncpus <= 1:
+        if intervals is None:
+            return Walker(in_fh,parser,**kwa)
+        else:
+            if not intervals:
+                logging.warning("Intervals given but empty, Walker won't do anything.")
+            return SerialWalker(in_fh, parser, intervals,**kwa)
+    else:
+        return ParallelWalker(in_fh,parser,intervals=intervals,ncpus=ncpus,**kwa)
 
 #parallel support
 
@@ -970,6 +1161,17 @@ def get_argparser():
                                        'we parallelise across intervals. \n'
                                        'Parallel parsing is not implemented for all '
                                        'parsers.')
+    argparser.add_argument("--no_chunk", action='store_true',
+                            help="If no_chunk is set, intervals are not divided into chunks, i.e., "
+                                 "multiprocessing runs with min(ncpus,len(intervals))")
+    argparser.add_argument("--chunk_factor", default=4,
+                            help="Multiply ncpus by this factor to get the number of chunks. "
+                                  "Larger value will imply overhead,"
+                                  "but helps to use all processors when some chromosomes are very short.")
+    argparser.add_argument("--temp_dir",
+                                 default='.',
+                                  help= "Path to folder to write temporary files to. "
+                                        "Only used when parallel processing.")
     argparser.add_argument("--skip_multiple_entries",action='store_true',
                          help='Skip all but the first entry for the same site in the VCF.')
     argparser.add_argument('--logging_level','-l',
@@ -1033,30 +1235,40 @@ def parse(args,sub_args):
     parser_class = parser_classes[args.parser]
     parser = parser_class(**{arg:getattr(sub_args,arg) for arg in vars(sub_args)})
 
-    if args.intervals is None:
-        if args.ncpus > 1:
-            logging.warning("Ignoring --ncpus! Multiprocessing is only supported if at least one interval is specified, "
-                            "e.g., -L Chr1.")
-        if args.auto_tabix:
-            logging.warning("Flag --auto_tabix given, but not in intervall (-L) mode, won't auto_tabix.")
-        walker = Walker(args.variant, parser, sep='\t',
-                                        skip_multiple_entries=args.skip_multiple_entries,
-                                        progress_report_interval=args.progress_report_interval)
-    else:
-        if args.ncpus <= 1:
-            walker = SerialWalker(args.variant, parser, args.intervals, sep='\t',auto_tabix=args.auto_tabix,
-                                                skip_multiple_entries=args.skip_multiple_entries,
-                                                progress_report_interval=args.progress_report_interval)
-        elif len(args.intervals) > 1:
-            walker = MultiRegionParallelWalker(args.variant, parser, args.intervals, sep='\t', auto_tabix=args.auto_tabix,
-                                                                                     ncpus=args.ncpus,
-                                                    skip_multiple_entries=args.skip_multiple_entries,
-                                                    progress_report_interval=args.progress_report_interval)
-        else:
-            walker = SingleRegionParallelWalker(args.variant, parser, args.intervals, sep='\t', auto_tabix=args.auto_tabix,
-                                                                                                    ncpus=args.ncpus,
-                                                    skip_multiple_entries=args.skip_multiple_entries,
-                                                    progress_report_interval=args.progress_report_interval)
+
+    walker = get_walker(args.variant, parser, intervals=args.intervals,
+                                            auto_tabix=args.auto_tabix,
+                            chunk=not args.no_chunk, chunk_factor=arg.chunk_factor,
+                                 tmp_dir=args.temp_dir, ncpus=args.ncpus,
+                           skip_multiple_entries=args.skip_multiple_entries,
+                            progress_report_interval=args.progress_report_interval)
+
+#    if args.intervals is None:
+#        if args.ncpus > 1:
+#            logging.warning("Ignoring --ncpus! Multiprocessing is only supported "
+#                                            "if at least one interval is specified, "
+#                                                                    "e.g., -L Chr1.")
+#        if args.auto_tabix:
+#            logging.warning("Flag --auto_tabix given, but not in "
+#                            "interval (-L) mode, won't auto_tabix.")
+#        walker = Walker(args.variant, parser, sep='\t',
+#                                        skip_multiple_entries=args.skip_multiple_entries,
+#                                        progress_report_interval=args.progress_report_interval)
+#    else:
+#        if args.ncpus <= 1:
+#            walker = SerialWalker(args.variant, parser, args.intervals, sep='\t',auto_tabix=args.auto_tabix,
+#                                                skip_multiple_entries=args.skip_multiple_entries,
+#                                                progress_report_interval=args.progress_report_interval)
+#        elif len(args.intervals) > 1:
+#            walker = MultiRegionParallelWalker(args.variant, parser, args.intervals, sep='\t', auto_tabix=args.auto_tabix,
+#                                                                                   tmp_dir=args.temp_dir,ncpus=args.ncpus,
+#                                                    skip_multiple_entries=args.skip_multiple_entries,
+#                                                    progress_report_interval=args.progress_report_interval)
+#        else:
+#            walker = SingleRegionParallelWalker(args.variant, parser, args.intervals, sep='\t', auto_tabix=args.auto_tabix,
+#                                                                                     tmp_dir=args.temp_dir,ncpus=args.ncpus,
+#                                                    skip_multiple_entries=args.skip_multiple_entries,
+#                                                    progress_report_interval=args.progress_report_interval)
     logging.info("Using {} to traverse the file.".format(walker.__class__.__name__))
 
     start = time.time()
