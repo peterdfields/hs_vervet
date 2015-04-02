@@ -64,23 +64,23 @@ class Walker(object):
                                id='',
                                     skip_multiple_entries=True,
                                     progress_report_interval=50000,**kwa):
+        self.id = id
         if not hasattr(in_fh, 'read'):
             logging.info("Input file has no .read method. Assuming it is a filepath string.")
             extension = os.path.splitext(in_fh)[-1]
             if extension in ['.gz','.bgz']:
-                logging.info("Input file has extension {}. Opening with gzip.".format(extension))
+                logging.info("{}Input file has extension {}. Opening with gzip.".format(self.id,extension))
                 in_fh = gzip.open(eu(in_fh))
             else:
                 in_fh = open(eu(in_fh))
         else:
             extension = os.path.splitext(in_fh.name)[-1]
             if extension in ['.gz','.bgz']:
-                logging.info("Input file has extension {}. Opening with gzip.".format(extension))
+                logging.info("{}Input file has extension {}. Opening with gzip.".format(self.id,extension))
                 in_fh = gzip.open(eu(in_fh.name))
         self.in_fh = in_fh
         self.sep = sep
         self.parser = parser
-        self.id = id
         self.skip_multiple_entries = skip_multiple_entries
         self.progress_report_interval = progress_report_interval
         self.finished = False
@@ -123,13 +123,13 @@ class Walker(object):
                     self.print_warning = False
                 if not self.skip_multiple_entries:
                     if self.print_warning:
-                        logging.warning("Multiple entries for pos {}:{}.\n"
+                        logging.warning("Multiple entries for pos {}:{}. "
                                   "Keeping all entries.".format(chrom,pos))
                     return False
                 else:
                     if self.print_warning:
-                        logging.warning("Warning, multiple entries for pos {}:{}.\n"
-                              "Skipping all but the first.".format(chrom,pos))
+                        logging.warning("{}Warning, multiple entries for pos {}:{}. "
+                              "Skipping all but the first.".format(self.id,chrom,pos))
                     return True
         self.prev_chrom = chrom
         self.prev_pos = pos
@@ -166,13 +166,13 @@ class Walker(object):
         """
         """
         if self.parser.parse_fun is not None:
-            logging.info("{} Parsing vcf body of {}.".format(self.id,fh))
+            logging.info("{}Parsing vcf body of {}.".format(self.id,fh))
             line_it = self._yield_split_line(fh)
             for d in line_it:
                 self.parser.parse_fun(d)
             #not perfect implementation, prev_pos is not necessarily updated 
             #in children if _skip_duplicate_line is overidden
-            logging.info("{} Finished: {} lines at {} {}".format(self.id,self.i,self.prev_chrom,self.prev_pos))
+            logging.info("{}Finished: {} lines at {} {}".format(self.id,self.i,self.prev_chrom,self.prev_pos))
 
     def cleanup(self):
         """
@@ -519,7 +519,7 @@ class ParallelWalker(SerialWalker):
                 temp_fns.append(tmp_fn)
                 setattr(subparser,a+'_fn',tmp_fn)
             subwalkers.append(SerialWalker(self.in_fh, subparser, [chunk],
-                                         id="Chunk {}:".format(chunk), **self.kwa))
+                                         id="Chunk {}: ".format(chunk), **self.kwa))
         self.subwalkers = subwalkers
         self.temp_fns = temp_fns
 
@@ -544,7 +544,6 @@ class ParallelWalker(SerialWalker):
 
     def run(self):
         self.parse_header()
-        #self.set_ncpus()
         if self.chunk:
             if self.missing:
                 self.replace_missing()
@@ -557,7 +556,8 @@ class ParallelWalker(SerialWalker):
         #pickled and sent to the child processes by multiprocessing
         for p in subparsers:
             for a in p.line_write_attrs:
-                setattr(p,a,open(getattr(p,a+'_fn'),'a'))
+                #attention the files are opened in read mode now
+                setattr(p,a,open(getattr(p,a+'_fn'),'r'))
         self.subparsers = subparsers
         self.reduce()
         logging.info("Creating output.")
@@ -712,13 +712,13 @@ def get_info_dic(line):
 ##--------------------Parsers-----------------------
 
 
-void_parser = argparse.ArgumentParser()
+void_parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 subparsers = void_parser.add_subparsers(dest='parser')
 
 
 parser_classes = {}
 def register(cls):
-   parser_classes[cls.__name__] = cls
+    parser_classes[cls.__name__] = cls
 
 
 
@@ -729,7 +729,9 @@ class MetaParser(type):
     """
     def __new__(cls, clsname, bases, attrs):
         newclass = super(MetaParser, cls).__new__(cls, clsname, bases, attrs)
-        if clsname != 'Parser':
+        if 'register' not in attrs.keys():
+            attrs['register'] = True
+        if attrs['register']:
             register(newclass)
             new_subparser = subparsers.add_parser(clsname, description=newclass.__doc__)
             args = getattr(newclass,'args')
@@ -791,6 +793,7 @@ class Parser(object):
     """
     __metaclass__ = MetaParser
     args = None
+    register = False
     def __init__(self,**kwa):
         known_args = self.__class__.args if self.__class__.args is not None else {}
         for arg in kwa:
@@ -860,6 +863,17 @@ class Parser(object):
     output_fun = None
 
 class TabixWrite(object):
+    """
+    A roughly file-like object,
+    That pipes everything that is
+    writen to it to bgzip in order to
+    compress it.
+
+    Input:
+    fh ... file handle
+    index ... (bool) Also create tabix index on closing the file.
+    """
+
     def __init__(self,fh, index):
         #idea: inherit all attributes from fh?
         self.fh = fh
@@ -887,10 +901,43 @@ class TabixWrite(object):
             if self.bgzip.returncode:
                 logging.warning("Failed to create tabix index for {}: {}".format(self.fh.name, err))
 
-#class TabixFile(file):
-#    def __init__(self, *args):
-#        file.__init__(self, *args)
+class ReduceError(Exception):
+    pass
 
+def line_write_reduce_cat(filenames, out_fh):
+    command = ["cat"] + filenames
+    p = subprocess.Popen(command, stdout=out_fh)
+    out, err = p.communicate()
+    if p.returncode:
+        raise ReduceError("Cat reduce step had non-zero exit status: {}.".format(err))
+
+def line_write_reduce_python(file_handles, out_fh):
+    for fh in file_handles:
+        for line in fh:
+            out_fh.write(line)
+
+class LineWriteParser(Parser):
+    """
+    Standard parser that reads from VCF
+    and writes to one file line by line 
+    (vcf or any other).
+
+    Subclass it and add custom parse method!
+    """
+    register = False
+    args ={
+        'out_file':
+            {'required':True,
+             'type':argparse.FileType('w'),
+             'help':"File path to write output to."}
+        }
+    def reduce_fun(self,selfs):
+        try:
+            line_write_reduce_cat([s.out_tsv.name for s in selfs], self.out_tsv)
+        except ReduceError:
+            logging.warning("Cat reduce step had non-zero exit status: {}."
+                            "Trying pytonic reduce.".format(err))
+            line_write_reduce_python([s.out_tsv for s in selfs], self.out_tsv)
 
 class VCFTo012(Parser):
     """
@@ -1129,7 +1176,8 @@ class SNPEFFParser(Parser):
 
 
 def get_argparser():
-    argparser = argparse.ArgumentParser(description="Parse a Variant Call Format (VCF) file.",
+    argparser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                        description="Parse a Variant Call Format (VCF) file.",
                                                                                  add_help=False)
 
 
@@ -1149,25 +1197,23 @@ def get_argparser():
     argparser.add_argument("--ncpus", '-nct',
                             type=int, default=1,
                                   help='Number of processes for parallel parsing. '
-                                       ' Requires at least one interval to be '
-                                       'specified '
-                                       'with -L. \n'
-                                       '1) If a single interval is '
-                                       'specified (e.g. -L Chr1:1-5000000), '
-                                       'this interval will be split into equal parts. '
-                                       'If start/end are not given, we try to infer '
-                                       'them from the VCF header (tag contig=...). \n'
-                                       '2) If multiple intervals are specified, '
-                                       'we parallelise across intervals. \n'
+                                       'If no intervals are specified with '
+                                       'with -L (e.g. -L Chr1:1-5000000), '
+                                       'or if intervals lack the end position (e.g. -L Chr1), '
+                                       'then we try to infer all regions present in the VCF '
+                                       'from the VCF header (tag contig=...). '
+                                       'Make the header contig tags are consisten with the '
+                                       'body in this case. '
                                        'Parallel parsing is not implemented for all '
                                        'parsers.')
     argparser.add_argument("--no_chunk", action='store_true',
                             help="If no_chunk is set, intervals are not divided into chunks, i.e., "
                                  "multiprocessing runs with min(ncpus,len(intervals))")
-    argparser.add_argument("--chunk_factor", default=4,
+    argparser.add_argument("--chunk_factor", default=6,
                             help="Multiply ncpus by this factor to get the number of chunks. "
-                                  "Larger value will imply overhead,"
-                                  "but helps to use all processors when some chromosomes are very short.")
+                                  "Larger value will imply overhead, "
+                                  "but helps to use all processors for the whole runtime "
+                                  "when chromosomes or intervals are of unequal length.")
     argparser.add_argument("--temp_dir",
                                  default='.',
                                   help= "Path to folder to write temporary files to. "
@@ -1238,7 +1284,7 @@ def parse(args,sub_args):
 
     walker = get_walker(args.variant, parser, intervals=args.intervals,
                                             auto_tabix=args.auto_tabix,
-                            chunk=not args.no_chunk, chunk_factor=arg.chunk_factor,
+                            chunk=not args.no_chunk, chunk_factor=args.chunk_factor,
                                  tmp_dir=args.temp_dir, ncpus=args.ncpus,
                            skip_multiple_entries=args.skip_multiple_entries,
                             progress_report_interval=args.progress_report_interval)

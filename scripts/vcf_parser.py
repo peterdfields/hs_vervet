@@ -653,8 +653,6 @@ add_analysis('vcf_to_012',
                                         "File path to write output tsv to."},
                 line_write_vars=['out_tsv'])
 
-
-
 #-----------
 
 def ref_alt_anc_header(line, tsv_fh,*args):
@@ -790,13 +788,13 @@ def get_filter_stats_reduce_fun(arg_dic,arg_dics):
     fi = arg_dics[0]['filter_info']
     for ad in arg_dics[1:]: 
         fi = fi.add(ad['filter_info'], fill_value=0) 
-    arg_dics['filter_info'] = fi
+    arg_dic['filter_info'] = fi
 
 def get_filter_stats_output_fun(arg_dic):
     try:
         arg_dic['filter_info'].to_csv(arg_dic['out_fh'],sep='\t')
     except KeyError:
-        return filter_info
+        return self.filter_info
 
 
 add_analysis('get_filter_stats',
