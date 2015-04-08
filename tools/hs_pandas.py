@@ -53,24 +53,70 @@ def index_rolling(s,window,func,overlap=0,min_n_values=0,*args,**kwargs):
     rolled = window_starts.apply(applyToWindow)
     return rolled
 
-def coding_variants_per_gene(gen_df,gene_df):
+def data_per_feature(rod,feature_df):
     """
-    Get the variants in gen_df which lie within a feature
-    (e.g. gene) in gene_df.
+    Get the entires in rod which lie within a feature
+    (e.g. gene) in feature_df.
     Input:
-    gen_df (genotype data frame)... rod such as SNP genotypes
-    gene_df (gene annotation data frame)... index must be (chrom,feature_name), must have columns 'start', 'end'
+    rod (reference ordered data)... pandas series or data frame with multiindex (chrom, pos)
+                                    such as SNP genotypes
+    feature_df (gene annotation data frame)... index must be (chrom,feature_name), must have columns 'start', 'end'
     """
-    gene_hit_df = pd.DataFrame()
-    for chrom in gen_df.index.droplevel(1).unique():
-        pos_rel_to_start = gene_df.ix[chrom]['start'].searchsorted(gen_df.ix[chrom].index)
-        pos_rel_to_end = np.searchsorted(gene_df.ix[chrom]["end"].values,gen_df.ix[chrom].index.values)
-        in_gene = (pos_rel_to_start - pos_rel_to_end) == 1
-        gene_id = gene_df.ix[chrom].iloc[pos_rel_to_end[in_gene]].index
-        snp_df = gen_df.ix[chrom][in_gene]
-        snp_df['chrom'] = chrom
-        snp_df['gene_id'] = gene_id
-        snp_df.set_index(['chrom','gene_id'],append=True,inplace=True)
-        snp_df = snp_df.reorder_levels(['chrom', 'gene_id','pos'])
-        gene_hit_df = gene_hit_df.append(snp_df)
-    return gene_hit_df
+    rod = pd.DataFrame(rod)
+    feature_hit_df = pd.DataFrame()
+    chrpos_names = rod.index.names
+    feature_name = feature_df.index.names[1]
+    for chrom in rod.index.droplevel(1).unique():
+        pos_rel_to_start = feature_df.ix[chrom]['start'].searchsorted(rod.ix[chrom].index)
+        pos_rel_to_end = np.searchsorted(feature_df.ix[chrom]["end"].values,rod.ix[chrom].index.values)
+        in_feature = (pos_rel_to_start - pos_rel_to_end) == 1
+        feature_id = feature_df.ix[chrom].iloc[pos_rel_to_end[in_feature]].index
+        snp_df = rod.ix[chrom][in_feature]
+        snp_df[chrpos_names[0]] = chrom
+        snp_df[feature_name] = feature_id
+        snp_df.set_index([chrpos_names[0],feature_name],append=True,inplace=True)
+        snp_df = snp_df.reorder_levels([chrpos_names[0], feature_name,chrpos_names[1]])
+        feature_hit_df = feature_hit_df.append(snp_df)
+    return feature_hit_df
+
+def get_features(peak_s, feature_df, max_dist):
+    """
+    take the input series and gets.
+    names of features nearby
+
+    Input:
+    peak_s ... pandas series with (chrom, pos) index and value of
+                the statistic ('peak height'). Series should be named.
+    feature_df ... data frame with feature info.
+    """
+    all_features = []
+    if not feature_df.index.is_monotonic:
+        feature_df = feature_df.sort_index()
+    tot_hit_df = pd.DataFrame()
+    for chrom in peak_s.index.droplevel(1).unique():
+        loc_feature_df = feature_df.ix[chrom]
+        #loc_feature_df = loc_feature_df.append(pd.DataFrame(np.nan,index=[np.inf],columns=loc_feature_df.columns))
+        pos_rel_to_start = np.searchsorted(loc_feature_df['start']-max_dist,peak_s.ix[chrom].index.values)
+        pos_rel_to_end = np.searchsorted(loc_feature_df["end"].values+max_dist,peak_s.ix[chrom].index.values)
+        features = list(set(loc_feature_df["feature_id"].iloc[np.hstack([range(a,b) for a,b in zip(pos_rel_to_end,pos_rel_to_start)])]))
+        all_features += features
+    return all_features
+
+
+def apply_to_feature(feature_df,groupby_func_name=None,function=None):
+    """
+    Apply a function to the entries for each feature.
+    feature_df ... dataframe with index (chrom, feature_name, pos)
+                   (Such as the output of data_per_feature())
+    groupby_func_name ... name of the function of the groupby object
+                         to apply to the data
+                          This is faster than applying a function object.
+    function ... alternatively: function object to apply
+    """
+    groups = feature_df.groupby(lambda idx: idx[1])
+    if groupby_func_name is not None:
+        return getattr(groups,groupby_func_name)()
+    elif function is not None:
+        return groups.apply(function)
+    else:
+        raise ValueError("Either groupby_func_name or function have to be given.")

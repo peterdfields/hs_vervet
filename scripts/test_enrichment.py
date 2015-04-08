@@ -48,7 +48,7 @@ def shift_rod(rod_df, rnd, mode = "grid"):
 
     Input:
     rod_df ... pandas dataframe or series with mulitiindex (chrom, pos)
-                
+
     modes ...
         'grid' ... just rotate the index of the rod data frame
                     this means that the positions stay the same only the
@@ -69,7 +69,6 @@ def shift_rod(rod_df, rnd, mode = "grid"):
         elif isinstance(rod_df,pd.core.frame.DataFrame):
             r = pd.DataFrame(rotate_data,index=rod_df.index,columns=rod_df.columns)
             return r
-        
     else:
         raise UserException("Only mode grid supported.")
 
@@ -77,12 +76,12 @@ def get_genes(peak_s, gene_df, max_dist):
     """
     take the input series and gets 
     names of genes nearby
-    
+
     Input:
     peak_s ... pandas series with (chrom, pos) index and value of
                 the statistic ('peak height'). Series should be named.
     gene_df ... data frame with gene info 
-    """    
+    """
     all_genes = []
     if not gene_df.index.is_monotonic:
         gene_df = gene_df.sort_index()
@@ -127,6 +126,9 @@ def get_go_assoc(gene_ls, gene_to_go):
 
 
 def multiple_permut_assoc(rod_s, gene_df, gene_to_go, top_n, max_dist, n_runs, ascending, rnd_seed=None):
+    """
+    UNUSED? ERASE?
+    """
     if rnd_seed is not None:
         np.random.seed(rnd_seed)
     if not rod_s.index.is_monotonic:
@@ -154,7 +156,6 @@ def multiple_permut_assoc_low_mem(rod_s, init_rank_table, gene_df, gene_to_go, t
         init_rank_table["rank"] += (init_rank_table["n_genes"] > \
                                     assoc.reindex(init_rank_table.index).fillna(0))
         init_rank_table["out_of"] += 1
-        
     return init_rank_table
 
 def save_permut_assoc_table(assoc_table,fn):
@@ -190,7 +191,6 @@ def get_peaks(gene_ls,gene_df,top_s,max_dist):
         """
         calculate distance
         """
-        
         s = pd.Series(df.index.droplevel(0).values - gene_pos.ix[df.index[0][0]],
                                                   index=df.index.droplevel(0).values)
         #df = pd.DataFrame(df.index.droplevel(0).values - gene_pos.ix[df.index[0][0]],
