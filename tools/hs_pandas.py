@@ -3,9 +3,6 @@ import pandas as pd
 """
 Specifications (So far, only implemented for the single index part below):
 
-rod ... Series or DataFrame of reference ordered data
-index: 
-    (chrom, pos)
 
 feature_df ... Data Frame of intervals along the genome,
                 equivalent of a bed file, but 1-indexed
@@ -19,6 +16,36 @@ columns
         ...
 """
 
+def check_rod(rod):
+    """
+    Check if input follows the ROD specifications.
+    Throw assertion error otherwise.
+    Specifications:
+    rod ... Series or DataFrame of reference ordered data
+    index:
+        (chrom, pos)
+    """
+    assert rod.index.names == ('chrom','pos'), "Index names must be ('chrom','pos')."
+    assert rod.ix and rod.iloc and rod.loc, ("ROD lacks pandas indexing functionality. "
+                                                            "Is it DataFrame or Series?")
+
+def check_feature_df(feature_df):
+    """
+    Check if input follows the ROD specifications.
+    Throw assertion error otherwise.
+    Specifications:
+    index:
+        (chrom, start)
+    columns
+        required:
+            end
+        optional:
+            feature
+    """
+    assert feature_df.index.names == ('chrom','start'), "Index names must be ('chrom','start')."
+    assert feature_df.ix and feature_df.iloc and feature_df.loc, ("feature_df lacks pandas indexing "
+                                                                  "functionality. Is it DataFrame or Series?")
+    assert 'end' in feature_df.columns, "feature_df lacks required column 'end'"
 
 def index_rolling(s,window,func,overlap=0,min_n_values=0,*args,**kwargs):
     """
@@ -73,9 +100,9 @@ def index_rolling(s,window,func,overlap=0,min_n_values=0,*args,**kwargs):
     return rolled
 
 
-##=todo: change this to coply with the new feature_df specifications
+##How should the output of this look like? What index?
 
-def data_per_feature(rod,feature_df):
+def data_per_feature(rod,feature_df, feature_name='feature', max_dist=0):
     """
     Get the entires in rod which lie within a feature
     (e.g. gene) in feature_df.
@@ -83,26 +110,38 @@ def data_per_feature(rod,feature_df):
     rod (reference ordered data)... pandas series or data frame with multiindex (chrom, pos)
                                     such as SNP genotypes
     feature_df (gene annotation data frame)... index must be (chrom,feature_name), must have columns 'start', 'end'
+    
+    max_dist not implemented yet, we need to take care of overlapping genes,
+    currently we only take the last
     """
     rod = pd.DataFrame(rod)
     chrom_features = []
     chrpos_names = rod.index.names
-    feature_name = feature_df.index.names[1]
     for chrom in rod.index.droplevel(1).unique():
-        pos_rel_to_start = feature_df.ix[chrom]['start'].searchsorted(rod.ix[chrom].index)
-        pos_rel_to_end = np.searchsorted(feature_df.ix[chrom]["end"].values,rod.ix[chrom].index.values)
+        try:
+            feature_chrom = feature_df.ix[chrom]
+        except KeyError:
+            continue
+        rod_chrom = rod.ix[chrom]
+        if not feature_chrom.index.is_monotonic:
+            feature_chrom.sort_index(inplace=True)
+        if not rod_chrom.index.is_monotonic:
+            rod_chrom = rod_chrom.sort_index()
+        pos_rel_to_start = feature_chrom.index.searchsorted(rod_chrom.index)
+        pos_rel_to_end = np.searchsorted(feature_chrom["end"].values,rod_chrom.index.values)
         in_feature = (pos_rel_to_start - pos_rel_to_end) == 1
-        feature_id = feature_df.ix[chrom].iloc[pos_rel_to_end[in_feature]].index
-        snp_df = rod.ix[chrom][in_feature]
-        snp_df[chrpos_names[0]] = chrom
+        feature_id = feature_chrom.iloc[pos_rel_to_end[in_feature]][feature_name].values
+        snp_df = rod_chrom[in_feature].copy()
+        snp_df['chrom'] = chrom
         snp_df[feature_name] = feature_id
-        snp_df.set_index([chrpos_names[0],feature_name],append=True,inplace=True)
-        snp_df = snp_df.reorder_levels([chrpos_names[0], feature_name,chrpos_names[1]])
         chrom_features.append(snp_df)
-    return pd.concat(chrom_features)
+    dpf = pd.concat(chrom_features)
+    dpf.set_index(['chrom'],append=True,inplace=True)
+    dpf = dpf.reorder_levels(['chrom','pos'])
+    return dpf
 
 
-def get_features(peak_s, feature_df, max_dist):
+def get_features(peak_s, feature_df, feature_name='feature', max_dist=0):
     """
     take the input series and gets.
     names of features nearby
@@ -119,9 +158,13 @@ def get_features(peak_s, feature_df, max_dist):
     for chrom in peak_s.index.droplevel(1).unique():
         loc_feature_df = feature_df.ix[chrom]
         #loc_feature_df = loc_feature_df.append(pd.DataFrame(np.nan,index=[np.inf],columns=loc_feature_df.columns))
-        pos_rel_to_start = np.searchsorted(loc_feature_df['start']-max_dist,peak_s.ix[chrom].index.values)
+        #print loc_feature_df.index-max_dist, peak_s.ix[chrom].index.values
+        #try:
+        pos_rel_to_start = np.searchsorted(loc_feature_df.index.values-max_dist,peak_s.ix[chrom].index.values)
+        #except:
+        #    print chrom, peak_s.ix[chrom]
         pos_rel_to_end = np.searchsorted(loc_feature_df["end"].values+max_dist,peak_s.ix[chrom].index.values)
-        features = list(set(loc_feature_df["feature_id"].iloc[np.hstack([range(a,b) for a,b in zip(pos_rel_to_end,pos_rel_to_start)])]))
+        features = list(set(loc_feature_df[feature_name].iloc[np.hstack([range(a,b) for a,b in zip(pos_rel_to_end,pos_rel_to_start)])]))
         all_features += features
     return all_features
 
@@ -214,7 +257,7 @@ def rod_to_chrompos(rod_1d, chrom_len_s, drop=True):
         end = min(end,rod.index[-1])
         rod.loc[slice(start,end),'chrom'] = chrom
         #print chrom, rod.loc[slice(start,end),columns[0]]
-        rod.loc[slice(start,end),'pos'] = rod.ix[slice(start,end)].index - start
+        rod.loc[slice(star/t,end),'pos'] = rod.ix[slice(start,end)].index - start
     if drop:
         rod.set_index(['chrom','pos'], inplace=True, drop=True)
     else:
@@ -270,12 +313,12 @@ def feature_df_to_chrompos(feature_df_1d, chrom_len_s):
         end_df.sortlevel(inplace=True)
     return end_df
 
-def data_per_feature_SI(rod, feature_df, feature_name = 'name'):
+def data_per_feature_FI(rod, feature_df, feature_name = 'feature'):
     """
     Get the entires in rod which lie within a feature
-    (e.g. gene) in feature_df.
+    (e.g. gene) in feature_df. FI stands for flattened index.
     Input:
-    rod (reference ordered data)... pandas series or data frame with multiindex (chrom, pos)
+    rod (reference ordered data)... pandas series or data frame with numeric index
                                     such as SNP genotypes
     feature_df (gene annotation data frame)... index must be (chrom,feature_name), must have columns 'start', 'end'
     """
@@ -285,7 +328,7 @@ def data_per_feature_SI(rod, feature_df, feature_name = 'name'):
     #lead to problems  as well?
     pos_rel_to_end = np.searchsorted(feature_df["end"].values,rod.index.values)
     in_feature = (pos_rel_to_start - pos_rel_to_end) == 1
-    feature_id = feature_df.iloc[pos_rel_to_end[in_feature]][feature_name].values  
-    rod = rod[in_feature]
+    feature_id = feature_df.iloc[pos_rel_to_end[in_feature]][feature_name].values
+    rod = rod[in_feature].copy()
     rod[feature_name] = feature_id
     return rod

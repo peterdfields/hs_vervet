@@ -7,6 +7,21 @@ ATTENTION:
 If ever adding a reference to the walker as an attribute of the parser,
 then the deepcopy in MultiRegionParallelWalker might make problems.
 
+Todo:
+Package walkers and parsers in different files.
+Auto import all parser files from a given folder.
+
+Long-Term:
+Now we parallelise by region. 
+If there are very different numbers of entries
+ in some regions, the different chunks can have
+very different processing time.
+Solution:
+Directly read the tabix-index and use this information.
+
+
+
+
 """
 import sys, os, json, uuid, gzip
 import logging, argparse, inspect, copy
@@ -1289,32 +1304,6 @@ def parse(args,sub_args):
                            skip_multiple_entries=args.skip_multiple_entries,
                             progress_report_interval=args.progress_report_interval)
 
-#    if args.intervals is None:
-#        if args.ncpus > 1:
-#            logging.warning("Ignoring --ncpus! Multiprocessing is only supported "
-#                                            "if at least one interval is specified, "
-#                                                                    "e.g., -L Chr1.")
-#        if args.auto_tabix:
-#            logging.warning("Flag --auto_tabix given, but not in "
-#                            "interval (-L) mode, won't auto_tabix.")
-#        walker = Walker(args.variant, parser, sep='\t',
-#                                        skip_multiple_entries=args.skip_multiple_entries,
-#                                        progress_report_interval=args.progress_report_interval)
-#    else:
-#        if args.ncpus <= 1:
-#            walker = SerialWalker(args.variant, parser, args.intervals, sep='\t',auto_tabix=args.auto_tabix,
-#                                                skip_multiple_entries=args.skip_multiple_entries,
-#                                                progress_report_interval=args.progress_report_interval)
-#        elif len(args.intervals) > 1:
-#            walker = MultiRegionParallelWalker(args.variant, parser, args.intervals, sep='\t', auto_tabix=args.auto_tabix,
-#                                                                                   tmp_dir=args.temp_dir,ncpus=args.ncpus,
-#                                                    skip_multiple_entries=args.skip_multiple_entries,
-#                                                    progress_report_interval=args.progress_report_interval)
-#        else:
-#            walker = SingleRegionParallelWalker(args.variant, parser, args.intervals, sep='\t', auto_tabix=args.auto_tabix,
-#                                                                                     tmp_dir=args.temp_dir,ncpus=args.ncpus,
-#                                                    skip_multiple_entries=args.skip_multiple_entries,
-#                                                    progress_report_interval=args.progress_report_interval)
     logging.info("Using {} to traverse the file.".format(walker.__class__.__name__))
 
     start = time.time()
