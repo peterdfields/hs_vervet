@@ -766,7 +766,7 @@ def rank_to_pval(rank_table, pval_threshold=1, category_to_description=None):
 
 
 if __name__ == "__main__":
-    import argparse
+    import argparse, time
     #import pdb
 
 
@@ -974,6 +974,11 @@ if __name__ == "__main__":
             if mode_args['features'] is None:
                 modeparsers.choices[permute_args.mode].error("argument --features is required")
 
+            if permute_args.mode == 'Summary':
+                if mode_args['chrom_len'] is not None:
+                    chrom_len = pd.read_csv(mode_args['chrom_len'],sep='\t', squeeze=True,index_col=0)
+                    mode_args['chrom_len'] = chrom_len
+
             logging.info("Loading rod from {}.".format(mode_args['rod'].name))
             rod_cols = parse_cols(mode_args.pop('rod_cols'))
             rod_s = pd.read_csv(mode_args.pop('rod'), index_col=[0,1],
@@ -995,10 +1000,6 @@ if __name__ == "__main__":
                                                                                                     feature_to_category.columns[0]))
                 feature_to_category.rename(columns={feature_to_category.columns[0]:feature_df.columns[1]}, inplace=True)
 
-            if permute_args.mode == 'Summary':
-                if mode_args['chrom_len'] is not None:
-                    chrom_len = pd.read_csv(mode_args['chrom_len'],sep='\t', squeeze=True,index_col=0)
-                    mode_args['chrom_len'] = chrom_len
 
 
             enrich = Enrichment(value_s=rod_s, feature_df=feature_df,
@@ -1013,8 +1014,12 @@ if __name__ == "__main__":
             enrich = Enrichment(candidate_features,feature_to_category=feature_to_category,
                                                                feature_name=feature_to_category.columns[0],
                                                                category_name=feature_to_category.columns[1], **mode_args)
-
+        start = time.time()
         enrich.permute(permute_args.n_permut)
+        end = time.time()
+        delta = end - start
+        logging.info("{} permutations took took {} seconds = {} minutes = {} hours.".format(permute_args.n_permut,
+                                                                                            delta,delta/60.,delta/3600.))
 
         if permute_args.rank_table_out is not None:
             enrich.rank_table.to_csv(permute_args.rank_table_out, sep='\t', header=True)

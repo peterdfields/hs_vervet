@@ -216,7 +216,11 @@ def rod_to_1d(rod, chrom_len_s, drop=True):
     columns = columns = [c for c in rod.columns if c not in ['index']]
     rod.reset_index(inplace=True)
     #return rod.groupby('chrom')
-    index = rod.groupby('chrom').apply(lambda df: df['pos']+chrom_len_s.loc[:df['chrom'].iloc[0]].iloc[:-1].sum()).values
+    try:
+        index = rod.groupby('chrom').apply(lambda df: df['pos']+chrom_len_s.loc[:df['chrom'].iloc[0]].iloc[:-1].sum()).values
+    except KeyError, e:
+        print chrom_len_s
+        raise e
     rod['index'] = index
     rod.set_index('index', inplace=True, drop=True)
     if not drop:
