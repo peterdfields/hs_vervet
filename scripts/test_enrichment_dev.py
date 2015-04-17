@@ -27,15 +27,18 @@ logger.setLevel(logging.DEBUG)
 
 def get_sep(fn_fh):
     try:
-        ext = os.path.splitext(fn_fh)[-1]
-    except ValueError:
-        ext =  os.path.splitext(fn_fh.name)[-1]
+        fn = fn_fh.name
+    except AttributeError:
+        fn = fn_fh
+    ext =  os.path.splitext(fn)[-1]
     if ext == ".tsv":
         sep = "\t"
     elif ext == ".csv":
         sep = ","
     else:
         sep = None
+        logging.warning('Automatically inferring file seperator of {}. '
+                        'Consider renaming your file *.tsv or *.csv for speed.'.format(fn))
     return sep
 
 def init_rank_table(assoc):
@@ -144,7 +147,7 @@ class CandidateEnrichment(object):
         self.rank_table = self.init_rank_table
         self.feature_df = feature_df
         self.ncpus = ncpus
-        
+
 
     def _bind_feature_to_category(self, feature_to_category, feature_name, category_name):
         assert feature_name in feature_to_category.columns
@@ -160,7 +163,10 @@ class CandidateEnrichment(object):
         Get series with number of candidate features associated with each
         category in feature_to_category.
         """
-        assoc = self.feature_to_category.set_index(self.feature_name).ix[features].groupby(self.category_name).apply(len)
+        try:
+            assoc = self.feature_to_category.set_index(self.feature_name).ix[features].groupby(self.category_name).apply(len)
+        except IndexError, e:
+            raise e
         assoc.name = "n_" + self.feature_name
         assoc.index.name = self.category_name
         return assoc
@@ -234,7 +240,8 @@ class SummaryEnrichment(CandidateEnrichment):
     """
     def __init__(self, value_s, feature_df,  feature_to_category, feature_name='feature', category_name='category',
                     feature_summary=None, feature_summary_fun=None,
-                 category_summary=None, category_summary_fun=None, max_dist=0, chrom_len=None, ncpus=1):
+                 category_summary=None, category_summary_fun=None, min_features_per_cat=2,
+                                                        max_dist=0, chrom_len=None, ncpus=1):
         #todo: logging for AssertionErrors, explain what the problem is
         hp.check_rod(value_s) 
         hp.check_feature_df(feature_df)
@@ -259,6 +266,8 @@ class SummaryEnrichment(CandidateEnrichment):
 
         self._bind_feature_to_category(feature_to_category, feature_name,  category_name)
 
+        self.prune_feature_to_category(min_features_per_cat)
+
         self.feature_summary = feature_summary
         self.category_summary = category_summary
         self.feature_summary_fun = feature_summary_fun
@@ -268,6 +277,30 @@ class SummaryEnrichment(CandidateEnrichment):
         self.rank_table = self.init_rank_table
         self.ncpus = ncpus
 
+
+    def prune_feature_to_category(self, min_features_per_cat):
+        self.feature_to_category = self.feature_to_category.drop_duplicates()
+        ftc_features = self.feature_to_category[self.feature_name].unique()
+        features = self.feature_df[self.feature_name].unique()
+        not_in_ftc =  np.setdiff1d(features, ftc_features, assume_unique=True)
+        not_in_feature_df = np.setdiff1d(ftc_features,features, assume_unique=True)
+        if len(not_in_ftc)>0:
+            logging.warning("{} features from the features file are not "
+                            "in the feature_to_category mapping.".format(len(not_in_ftc)))
+        if len(not_in_feature_df)>0:
+            logging.warning("{} features from the feature_to_category mapping are not "
+                            "in the features file. Removing them.".format(len(not_in_feature_df)))
+            self.feature_to_category = self.feature_to_category.set_index(self.feature_name).\
+                                                        drop(pd.Index(not_in_feature_df)).reset_index()
+        if min_features_per_cat>0:
+            n_cats = len(self.feature_to_category[self.category_name].unique())
+            logging.info("Removing categories for which there are less than {} "
+                            "features in the features file.".format(min_features_per_cat))
+            self.feature_to_category = self.feature_to_category.groupby(self.category_name).\
+                                                           filter(lambda x: len(x) >= min_features_per_cat)
+            n_removed = n_cats - len(self.feature_to_category[self.category_name].unique())
+            logging.info("{} categories removed.".format(n_removed))
+        self.feature_to_category.reset_index(inplace=True)
 
 
     def initital_rank_table(self):
@@ -415,7 +448,7 @@ class TopScoresEnrichment(SummaryEnrichment):
     """
     def __init__(self,value_s, feature_df,  feature_to_category, top_type, top,
                                  feature_name='feature', category_name='category',
-                                                       ascending=False, max_dist=0, ncpus=1):
+                                 min_features_per_cat=2, ascending=False, max_dist=0, ncpus=1):
 
         top_types = ['count','threshold','quantile']
         assert feature_name in feature_df.columns
@@ -424,6 +457,8 @@ class TopScoresEnrichment(SummaryEnrichment):
         self.feature_df = feature_df.copy()
         self._bind_feature_to_category(feature_to_category, feature_name,  category_name)
         self.value_name = self.value_s.name
+
+        self.prune_feature_to_category(min_features_per_cat)
 
         if top_type == 'count':
             top_n = top
@@ -863,7 +898,11 @@ if __name__ == "__main__":
                                                         "Expects 4 integers or  strings. "
                                                         "E.g., if the file is a bed with the "
                                                         "feature name in the 4th column, use --feature_cols 0 1 2 3")
-
+        p.add_argument('--min_features_per_cat', type=int, default=2, help="Minimum number of features found "
+                                                                           "in the features file in order not to exclude "
+                                                                           "a category from the testing. If categories are "
+                                                                           "excluded beforehand you can speed up calculations "
+                                                                           "by setting this to 0.")
         #p.add_argument("--peaks_per_gene", type=argparse.FileType('w'),
         #                           help="File to write peak info for each gene.")
         #p.add_argument("--top_peaks", type=argparse.FileType('w'),
@@ -961,10 +1000,9 @@ if __name__ == "__main__":
     feature_to_category_cols = parse_cols(args.feature_to_category_cols)
     feature_to_category = pd.read_csv(args.feature_to_category,usecols=feature_to_category_cols,
                                                          sep=get_sep(args.feature_to_category.name))
-
+    feature_to_category = feature_to_category[feature_to_category_cols]
 
     if args.run_type == 'Permute':
-
         if permute_args.mode is None:
             permuteparser.error("argument --mode/-M is required")
 
@@ -985,18 +1023,18 @@ if __name__ == "__main__":
                     chrom_len = pd.read_csv(mode_args['chrom_len'],sep=get_sep(mode_args['chrom_len'].name), squeeze=True,index_col=0)
                     mode_args['chrom_len'] = chrom_len
 
-            logging.info("Loading rod from {}.".format(mode_args['rod'].name))
-            rod_cols = parse_cols(mode_args.pop('rod_cols'))
-            rod_s = pd.read_csv(mode_args.pop('rod'), index_col=[0,1],
-                                        usecols=rod_cols, sep='\t', squeeze=True)
-            rod_s.index.set_names(['chrom','pos'], inplace=True)
 
             logging.info("Loading features from {}.".format(mode_args['features'].name))
             feature_cols = parse_cols(mode_args.pop('feature_cols'))
-            feature_df = pd.read_csv(mode_args.pop('features'), index_col=[0,1],
-                                        usecols=feature_cols, sep='\t')
+            
+            features_fh = mode_args.pop('features')
+            feature_df = pd.read_csv(features_fh, index_col=[0,1],
+                                        usecols=feature_cols, sep=get_sep(features_fh))
             feature_df.index.set_names(['chrom','start'], inplace=True)
+            feature_df = feature_df[feature_cols[2:]]
             feature_df.rename(columns={feature_cols[2]:'end'}, inplace=True)
+            #print feature_df
+            #sys.exit(1)
 
             if feature_df.columns[1] != feature_to_category.columns[0]:
                 logging.warning("Feature name in features and feature_to_category do not match. "
@@ -1007,6 +1045,12 @@ if __name__ == "__main__":
                 feature_to_category.rename(columns={feature_to_category.columns[0]:feature_df.columns[1]}, inplace=True)
 
 
+            logging.info("Loading rod from {}.".format(mode_args['rod'].name))
+            rod_cols = parse_cols(mode_args.pop('rod_cols'))
+            rod_fh = mode_args.pop('rod')
+            rod_s = pd.read_csv(rod_fh, index_col=[0,1],
+                                        usecols=rod_cols, sep=get_sep(rod_fh), squeeze=True)
+            rod_s.index.set_names(['chrom','pos'], inplace=True)
 
             enrich = Enrichment(value_s=rod_s, feature_df=feature_df,
                                 feature_to_category=feature_to_category, feature_name=feature_df.columns[1],
@@ -1042,7 +1086,7 @@ if __name__ == "__main__":
         if reduce_args.category_to_description is not None:
             ctd_cols = parse_cols(reduce_args.category_to_description_cols)
             cat_to_desc = pd.read_csv(reduce_args.category_to_description,
-                                                 usecols=ctd_cols, sep='\t')
+                                                 usecols=ctd_cols, sep=get_sep(reduce_args.category_to_description))
         else:
             cat_to_desc = None
 
