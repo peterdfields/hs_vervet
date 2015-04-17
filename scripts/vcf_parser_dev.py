@@ -580,64 +580,6 @@ class ParallelWalker(SerialWalker):
         self.del_temp_files()
         logging.info("Run finished.")
 
-#class SingleRegionParallelWalker(MultiRegionParallelWalker):
-#    def __init__(self, in_fh, parser, intervals, **kwa):
-#        assert len(intervals) == 1, ("ParallelSingleRegionWalker requires a "
-#                                                           "single interval.")
-#        #logging.info("One interval specified, starting single_region_parallel mode with {} cores.".format(ncpus))
-#        super(SingleRegionParallelWalker, self).__init__(in_fh, parser, intervals, **kwa)
-#        chrom, start, end = self._parse_interval(intervals[0])
-#        self.contigs
-#
-#    def _parse_interval(self,interval):
-#        try:
-#            chrompos = interval.split(":")
-#            chrom = chrompos[0]
-#            try:
-#                startend = chrompos[1].split('-')
-#                start = int(startend[0])
-#                try:
-#                    end = int(startend[1])
-#                except:
-#                    end = None
-#            except IndexError:
-#                start = None
-#                end = None
-#        except TypeError:
-#            chrom = interval[0]
-#            start = interval[1]
-#            end = interval[2]
-#        if start is None:
-#            start = 0
-#        if end is None:
-#            self._header_line_parser = self._header_line_parser_search_contig_len
-#            logging.info("No chromosome end specified, searching for 'contig'"
-#                         "tag in vcf header.")
-#        return (chrom, start, end)
-#
-#
-#    def parse_header(self):
-#        super(SingleRegionParallelWalker, self).parse_header()
-#        self.intervals = self.get_intervals()
-#
-#    def _header_line_parser_search_contig_len(self,line):
-#        if line[:9] == '##contig=':
-#                    contig_dic = get_header_line_dic(line)
-#                    if contig_dic['ID'] == self.chrom:
-#                        length = int(contig_dic['length'])
-#                        self.end = length
-#        if self.parser.header_fun is not None:
-#            self.parser.header_fun(line)
-#
-#    def get_intervals(self):
-#        n_chunks = self.ncpus
-#        chunksize = int((self.end-self.start)/n_chunks) + 1
-#        starts = []
-#        for s in range(self.start,self.end,chunksize):
-#            starts.append(s)
-#        intervals = [(self.chrom,s,e) for s,e in zip(starts,[s-1 for s in starts[1:]]+[self.end])]
-#        return intervals
-
 
 
 #--------------SUPPORT FUNCTIONS-------------------------
