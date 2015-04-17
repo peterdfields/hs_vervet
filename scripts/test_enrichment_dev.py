@@ -25,6 +25,19 @@ logging.basicConfig(format='%(levelname)-8s %(asctime)s  %(message)s')
 logger.setLevel(logging.DEBUG)
 
 
+def get_sep(fn_fh):
+    try:
+        ext = os.path.splitext(fn_fh)[-1]
+    except ValueError:
+        ext =  os.path.splitext(fn_fh.name)[-1]
+    if ext == ".tsv":
+        sep = "\t"
+    elif ext == ".csv":
+        sep = ","
+    else:
+        sep = None
+    return sep
+
 def init_rank_table(assoc):
     rt = pd.DataFrame({assoc.name:assoc.values,"rank":0,"out_of":0},index=assoc.index)
     rt.index.name = assoc.index.name
@@ -448,15 +461,6 @@ class TopScoresEnrichment(SummaryEnrichment):
 
 #general l I/O functions
 
-def get_sep(fn):
-    ext = os.path.splitext(fn)[-1]
-    if ext == ".tsv":
-        sep = "\t"
-    elif ext == ".csv":
-        sep = ","
-    else:
-        raise Exception("File ending must be .tsv or .csv but file is {}".format(fn))
-    return sep
 
 def read_table(file_handle,sep=None,**kwargs):
     if sep is None:
@@ -706,12 +710,12 @@ def open_reduce_fns(fns):
     return permut_fhs
 
 def reduce_fhs(permut_fhs):
-    tot_rank = pd.read_csv(permut_fhs[0], index_col=0, sep='\t').dropna()
+    tot_rank = pd.read_csv(permut_fhs[0], index_col=0, sep=get_sep(permut_fhs[0])).dropna()
     tot_rank["index"] = tot_rank.index
     tot_rank.drop_duplicates(subset="index",inplace=True)
     del tot_rank["index"]
     for fh in permut_fhs[1:]:
-        rank_table = pd.read_csv(fh,index_col=0, sep='\t').dropna()
+        rank_table = pd.read_csv(fh,index_col=0, sep=get_sep(fh)).dropna()
         rank_table["index"] = rank_table.index
         rank_table.drop_duplicates(subset="index",inplace=True)
         try:
@@ -901,6 +905,7 @@ if __name__ == "__main__":
         return cols1
 
 
+
     args, unknown = parser.parse_known_args()
 
     help_str = "\n"+parser.format_help()
@@ -954,7 +959,8 @@ if __name__ == "__main__":
 
     logging.info("Loading feature to category mapping from {}.".format(args.feature_to_category.name))
     feature_to_category_cols = parse_cols(args.feature_to_category_cols)
-    feature_to_category = pd.read_csv(args.feature_to_category,usecols=feature_to_category_cols, sep='\t')
+    feature_to_category = pd.read_csv(args.feature_to_category,usecols=feature_to_category_cols,
+                                                         sep=get_sep(args.feature_to_category.name))
 
 
     if args.run_type == 'Permute':
@@ -976,7 +982,7 @@ if __name__ == "__main__":
 
             if permute_args.mode == 'Summary':
                 if mode_args['chrom_len'] is not None:
-                    chrom_len = pd.read_csv(mode_args['chrom_len'],sep='\t', squeeze=True,index_col=0)
+                    chrom_len = pd.read_csv(mode_args['chrom_len'],sep=get_sep(mode_args['chrom_len'].name), squeeze=True,index_col=0)
                     mode_args['chrom_len'] = chrom_len
 
             logging.info("Loading rod from {}.".format(mode_args['rod'].name))
