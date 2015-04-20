@@ -38,7 +38,7 @@ def get_sep(fn_fh):
     else:
         sep = None
         logging.warning('Automatically inferring file seperator of {}. '
-                        'Consider renaming your file *.tsv or *.csv for speed.'.format(fn))
+                        'Consider renaming your file to *.tsv or *.csv for speed.'.format(fn))
     return sep
 
 def init_rank_table(assoc):
@@ -211,7 +211,7 @@ class CandidateEnrichment(object):
         return rank_to_pval(self.rank_table, pval_threshold=1, category_to_description=None)
 
 
-    def get_gene_info(self):
+    def get_candidate_location(self):
         """
         for a list of gene ids,
         get a data frame with their.
@@ -369,60 +369,6 @@ class SummaryEnrichment(CandidateEnrichment):
         return rank_table
 
 
-#    def get_peaks(gene_ls,gene_df,top_s,max_dist):
-#    """
-#    For each gene in gene_info get the
-#    peaks within max_dist in top_s. This.
-#    is basically reverse engineering to get
-#    the peak info for each gene that was found.
-#    to be associated with a peak..
-#....
-#    Input:
-#    gene_info ... data frame with index ('chrom','start')
-#                and columns 'gene_id' and 'end'
-#    top_s ... series of peak positions with index (chrom, pos)
-#                and values peak height
-#    max_dist ... maximum distance between gene and peak
-#    """
-#    gene_info = get_gene_info(gene_ls, gene_df)
-#    def get_dist(df,gene_pos):
-#        """
-#        calculate distance
-#        """
-#        s = pd.Series(df.index.droplevel(0).values - gene_pos.ix[df.index[0][0]],
-#                                                  index=df.index.droplevel(0).values)
-#        #df = pd.DataFrame(df.index.droplevel(0).values - gene_pos.ix[df.index[0][0]],
-#        #                                          index=df.index.droplevel(0).values)
-#        return s
-#    tot_gene_peaks_df = pd.DataFrame()
-#    if not top_s.index.is_monotonic:
-#        top_s = top_s.sort_index()
-#    for chrom in gene_info.index.droplevel(1).unique():
-#        loc_top_s = top_s.ix[chrom]
-#        start = np.searchsorted(loc_top_s.index.values+max_dist,gene_info.ix[chrom].index.values)
-#        end = np.searchsorted(loc_top_s.index.values-max_dist,gene_info.ix[chrom]["end"].values)
-#
-#        x = pd.concat([loc_top_s.iloc[st:ed] for st,ed in zip(start,end)],
-#                      keys=gene_info.ix[chrom]["gene_id"].values)
-#        x.name = "peak_height"
-#
-#
-#        dist_start = x.groupby(lambda i: i[0]).\
-#                    apply(lambda df: get_dist(df,
-#                                              gene_info.ix[chrom].reset_index().set_index("gene_id")["pos"]))
-#        dist_start.name = "dist_start"
-#        dist_end = x.groupby(lambda i: i[0]).\
-#                    apply(lambda df: get_dist(df,
-#                                              gene_info.ix[chrom].set_index("gene_id")["end"]))
-#        dist_end.name = "dist_end"
-#        gene_peaks_df = pd.concat([x,dist_start,dist_end],axis=1)
-#        gene_peaks_df.index = pd.MultiIndex.from_arrays([gene_peaks_df.index.droplevel(1),
-#                                         [chrom]*len(x),
-#                                         gene_peaks_df.index.droplevel(0)])
-#        tot_gene_peaks_df = pd.concat([tot_gene_peaks_df, gene_peaks_df],axis=0)
-#
-#    tot_gene_peaks_df.index.names = ["gene_id","chrom","peak_pos"]
-#    return tot_gene_peaks_df
 
 
 class TopScoresEnrichment(SummaryEnrichment):
@@ -491,8 +437,13 @@ class TopScoresEnrichment(SummaryEnrichment):
         #assoc.index.name = self.category_name
         return assoc
 
-
-
+    def get_info(self):
+        value_s = self.value_s.sort(ascending=self.ascending, inplace=False)
+        top_s = value_s.iloc[:self.top_n]
+        self.candidate_features = hp.get_features(top_s, self.feature_df, feature_name=self.feature_name,
+                                                                             max_dist=self.max_dist)
+        self.peaks_per_gene = get_peaks(cand_genes,gene_df, top_s, self..max_dist)
+        peak_info = get_peak_info(top_s,peaks_per_gene)
 
 #general l I/O functions
 
@@ -593,7 +544,7 @@ def get_gene_info(gene_ls,gene_df):
     gi = gene_df[gene_df["gene_id"].apply(lambda x: x in gene_ls)]
     return gi
 
-def get_peaks(gene_ls,gene_df,top_s,max_dist):
+def get_peaks(sub_gene_df,top_s,max_dist,feature_name):
     """
     For each gene in gene_info get the
     peaks within max_dist in top_s. This 
@@ -608,7 +559,7 @@ def get_peaks(gene_ls,gene_df,top_s,max_dist):
                 and values peak height
     max_dist ... maximum distance between gene and peak
     """
-    gene_info = get_gene_info(gene_ls, gene_df)
+    gene_info = sub_gene_df
     def get_dist(df,gene_pos):
         """
         calculate distance
@@ -625,20 +576,18 @@ def get_peaks(gene_ls,gene_df,top_s,max_dist):
         loc_top_s = top_s.ix[chrom]
         start = np.searchsorted(loc_top_s.index.values+max_dist,gene_info.ix[chrom].index.values)
         end = np.searchsorted(loc_top_s.index.values-max_dist,gene_info.ix[chrom]["end"].values)
-        
         x = pd.concat([loc_top_s.iloc[st:ed] for st,ed in zip(start,end)],
-                      keys=gene_info.ix[chrom]["gene_id"].values)
+                      keys=gene_info.ix[chrom][feature_name].values)
         x.name = "peak_height"
-        
 
 
         dist_start = x.groupby(lambda i: i[0]).\
                     apply(lambda df: get_dist(df,
-                                              gene_info.ix[chrom].reset_index().set_index("gene_id")["pos"]))
+                                              gene_info.ix[chrom].reset_index().set_index(feature_name)["start"]))
         dist_start.name = "dist_start"
         dist_end = x.groupby(lambda i: i[0]).\
                     apply(lambda df: get_dist(df,
-                                              gene_info.ix[chrom].set_index("gene_id")["end"]))
+                                              gene_info.ix[chrom].set_index(feature_name)["end"]))
         dist_end.name = "dist_end"
         gene_peaks_df = pd.concat([x,dist_start,dist_end],axis=1)
         gene_peaks_df.index = pd.MultiIndex.from_arrays([gene_peaks_df.index.droplevel(1),
@@ -647,7 +596,7 @@ def get_peaks(gene_ls,gene_df,top_s,max_dist):
         tot_gene_peaks_df = pd.concat([tot_gene_peaks_df, gene_peaks_df],axis=0)
             
 
-    tot_gene_peaks_df.index.names = ["gene_id","chrom","peak_pos"]
+    tot_gene_peaks_df.index.names = [feature_name,"chrom","peak_pos"]
     return tot_gene_peaks_df
 
 
@@ -661,15 +610,15 @@ def get_peak_info(top_s,peaks_per_gene):
     peak_info.index.names = ["chrom","pos"]
     return peak_info
 
-def get_initial_rank_table(real_assoc):
-    df = pd.DataFrame({"n_genes":real_assoc.values,"rank":0,"out_of":0},index=real_assoc.index)
-    df.index.name = "category"
-    return df
-
-def get_genes_per_go(gene_ls, gene_to_go):
-    s = gene_to_go.set_index("gene_symbol").ix[gene_ls].groupby("go_identifier").apply(lambda x: list(x.index))
-    s.name = "genes"
-    return s
+#def get_initial_rank_table(real_assoc):
+#    df = pd.DataFrame({"n_genes":real_assoc.values,"rank":0,"out_of":0},index=real_assoc.index)
+#    df.index.name = "category"
+#    return df
+#
+#def get_genes_per_go(gene_ls, gene_to_go):
+#    s = gene_to_go.set_index("gene_symbol").ix[gene_ls].groupby("go_identifier").apply(lambda x: list(x.index))
+#    s.name = "genes"
+#    return s
 
 def get_p_val(rank_table):
     """
@@ -681,53 +630,53 @@ def get_p_val(rank_table):
     r.name = "p_value"
     return r
 
-def update_rank(rank_table,assoc_table):
-    """
-    UNUSED, remove????
-    todo: describe what assoc_table is, isn't this a series?
-    """
-    r = assoc_table.apply(lambda row: get_rank(row,rank_table),axis=1)
-    r.index.name = "category"
-    return r
-
-
-
-def total_rank(rank_table, permut_fns):
-    """
-    Unused, remove?????
-    """
-    rt = rank_table.copy()
-    for f in permut_fns:
-        rt = update_rank(rt,f)
-    return rt
-
-
-def empirical_rank(value,dist):
-    """
-    get empirical p value of
-    value with respect to list of 
-    values in dist
-    """
-    array = np.append(value,dist)
-    temp = array.argsort()
-    ranks = np.empty(len(array), int)
-    ranks[temp] = np.arange(len(array))
-    return ranks[0]
-
-def get_rank(series,rank_df):
-    go = series.name
-    try:
-        go_s = rank_df.ix[go]
-    except KeyError:
-        go_s = pd.Series({"n_genes":0,"rank":0,"out_of":0})
-    real_val = go_s["n_genes"]
-    old_rank = go_s["rank"]
-    old_out_of = go_s["out_of"]
-    rank = empirical_rank(real_val,series.values)
-    new_rank = old_rank + rank
-    new_out_of = old_out_of + len(series)
-
-    return pd.Series({"n_genes":real_val,"rank":new_rank,"out_of":new_out_of})
+#def update_rank(rank_table,assoc_table):
+#    """
+#    UNUSED, remove????
+#    todo: describe what assoc_table is, isn't this a series?
+#    """
+#    r = assoc_table.apply(lambda row: get_rank(row,rank_table),axis=1)
+#    r.index.name = "category"
+#    return r
+#
+#
+#
+#def total_rank(rank_table, permut_fns):
+#    """
+#    Unused, remove?????
+#    """
+#    rt = rank_table.copy()
+#    for f in permut_fns:
+#        rt = update_rank(rt,f)
+#    return rt
+#
+#
+#def empirical_rank(value,dist):
+#    """
+#    get empirical p value of
+#    value with respect to list of 
+#    values in dist
+#    """
+#    array = np.append(value,dist)
+#    temp = array.argsort()
+#    ranks = np.empty(len(array), int)
+#    ranks[temp] = np.arange(len(array))
+#    return ranks[0]
+#
+#def get_rank(series,rank_df):
+#    go = series.name
+#    try:
+#        go_s = rank_df.ix[go]
+#    except KeyError:
+#        go_s = pd.Series({"n_genes":0,"rank":0,"out_of":0})
+#    real_val = go_s["n_genes"]
+#    old_rank = go_s["rank"]
+#    old_out_of = go_s["out_of"]
+#    rank = empirical_rank(real_val,series.values)
+#    new_rank = old_rank + rank
+#    new_out_of = old_out_of + len(series)
+#
+#    return pd.Series({"n_genes":real_val,"rank":new_rank,"out_of":new_out_of})
 
 
 
