@@ -990,7 +990,7 @@ class GetFilterStats(Parser):
         try:
             pd
         except NameError, e:
-            logging.error("{} required python pandas, but it seems not to be imported.")
+            logging.error("{} requires python pandas, but it seems not to be imported.".format(self.__class__.__name__))
             raise e
         self.count_dic = {}
 
@@ -1018,6 +1018,112 @@ class GetFilterStats(Parser):
             self.filter_info.to_csv(self.out_fn,sep='\t')
         else:
             return self.filter_info
+
+class AccessibleGenomeStats(Parser):
+    """
+    Parse a whole genome (all sites) VCF 
+    to get statistics about the number of called
+    SNPs and nonsnps. This gives information on the number
+    of accessible (i.e., non Filtered, non missing genotype)
+    sites both global and per individual.
+    """
+    args = {"out_filter_count":{'required':True,
+                      'type':argparse.FileType('w'),
+                      'help':"File path to write count of filtered sites as json to."},
+            "out_N_count":{'required':True,
+                      'type':argparse.FileType('w'),
+                      'help':"Tsv path to write per individual missing genotype count to."},
+            "out_N_corr":{'required':True,
+                      'type':argparse.FileType('w'),
+                      'help':"Tsv path to write cross individual correlations "
+                                                "of missing genotypes to."}}
+
+    def __init__(self,**kwa):
+        self.sites_dic = {"total":0}#"pass_nosnp":0,
+                                #"pass_snp":0,"filter_nosnp":0,"filter_snp":0}
+
+
+    def header_fun(self,line):
+        if line[:6] == '#CHROM':
+            self.samples = line.strip().split('\t')[9:]
+            self.N_df = pd.DataFrame(0,
+                                            columns=self.sites_dic.keys(),
+                                            index=self.samples)
+            self.Nxy = np.zeros((len(self.samples),len(self.samples)))
+
+    def parse_fun(self, line):
+        add = lambda s: add_to_countdic(self.sites_dic,s)
+
+        #sites_dic = {"total":0,"pass_nosnp":0,"pass_snp":0,"filter_nosnp":0,"filter_snp":0}
+
+        add("total")
+        ns = np.array([1 if '.' in s.split(':')[0] else 0 for s in line[9:]]) #vector of Ns
+        self.N_df["total"] +=  ns
+        self.Nxy += np.outer(ns,ns)
+        ref = line[3]
+        alt = line[4].split(',')
+        pass0 = (line[6] in ['PASS','Pass'])
+
+        if pass0:
+            category = 'pass_'
+        else:
+            category = 'filter_'
+#        try:
+#            af = float(get_info_dic(line)['AF'].split(',')[0])
+#            if len(alt) == 1 and len(ref) == 1 and len(alt[0]) == 1 and alt[0] in nucleotides and af>0 and af<1:
+#                category += 'snp'
+#            else:
+#                category += 'nosnp'
+#        except KeyError:
+#            category += 'nosnp'
+
+        #test where the discrepancy to SNPstats comes from....
+        try:
+            af = float(get_info_dic(line)['AF'].split(',')[0])
+            if len(alt) != 1: #and len(ref) == 1 and len(alt[0]) == 1 and alt[0] in nucleotides and af>0 and af<1:
+                category += 'altgt1'
+            elif len(ref) != 1:
+                category += 'refgt1'
+            elif len(alt[0])>1:
+                category += 'alt0gt1'
+            elif alt[0] not in nucleotides:
+                category += '?allele'
+            elif af==0:
+                category += 'af0'
+            elif af==1:
+                category += 'af1'
+            else:
+                category += 'snp'
+        except KeyError:
+            category += 'noaf'
+
+        add(category)
+        try:
+            self.N_df[category] += ns
+        except KeyError:
+             self.N_df[category] = ns
+
+    def reduce_fun(self, selfs):
+        self.N_df = sum([s.N_df for s in selfs])
+        self.sites_dic = sum_countdics([s.sites_dic for s in selfs])
+        self.Nxy = sum([s.Nxy for s in selfs])
+
+    def output_fun(self):
+        N_df = self.N_df
+        sites_dic = self.sites_dic
+        Nxy = pd.DataFrame(self.Nxy,index=self.samples,columns=self.samples)
+        corr = (Nxy-1./sites_dic["total"]*np.outer(N_df["total"],N_df["total"]))/\
+                np.sqrt(np.outer(N_df["total"]*(1-1./sites_dic["total"]*N_df["total"]),N_df["total"]*(1-1./sites_dic["total"]*N_df["total"])))
+        #try:
+        json.dump(sites_dic,self.out_filter_count)
+        N_df.to_csv(self.out_N_count,sep='\t')
+        corr.to_csv(self.out_N_corr,sep='\t')
+        #except KeyError:
+        #    logging.info("At least one output filename not found. Returning results.")
+        #    return (sites_dic, N_df, corr)
+
+
+
 
 
 class SNPEFFParser(Parser):
@@ -1236,6 +1342,7 @@ def parse(args,sub_args):
         pass
 
     parser_class = parser_classes[args.parser]
+    print parser_class
     parser = parser_class(**{arg:getattr(sub_args,arg) for arg in vars(sub_args)})
 
 
