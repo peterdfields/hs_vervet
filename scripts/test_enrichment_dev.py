@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 """
 TODO:
--similar case with other parameters
--it would save disk space if we do not add go categories with 0 genes
-to all assoc_tables, but only add them in the end. (I think the most recent version supports
-this, try it...)
--Package functions so that we can run enrichment on candidate gene list directly (without a rod_s).
--Package into classes?
+-- fix the gene summary mode so that is supports overlapping features
+    (necessary to implement max_dist argument)
+-- allow previous windowing of input data for better performance
+-- ask magnus about applications
+
+
 """
 import os, sys
 import pandas as pd
@@ -114,39 +114,40 @@ class CandidateEnrichment(object):
     """
     Test enrichment of a candidate feature list
     against a feature to category mapping.
-    In a common example, features will be genes 
+    In a common example, candidate_features will be genes 
     and categories will gene ontology (GO) categories.
     
     Input:
-    features ... list of feature names to be tested
+    candidate_features ... list of feature names to be tested
     feature_to_category ... data frame with arbitrary index
     """
 
-    def __init__(self, features, feature_to_category,
+    def __init__(self, candidate_features, feature_to_category, value_name='candidate',
                  feature_name='feature', category_name='category', feature_df=None,  ncpus=1):
 
-        self.features = np.unique(features)
-        if len(self.features) < len(features):
-            logging.warning("There are duplicates in features, "
+        self.candidate_features = np.unique(candidate_features)
+        if len(self.candidate_features) < len(candidate_features):
+            logging.warning("There are duplicates in candidate_features, "
                                                     "going to be removed...")
 
         self._bind_feature_to_category(feature_to_category, feature_name,  category_name)
 
 
-        n_candidates = len(self.features)
-        self.all_features = self.feature_to_category[self.feature_name].unique()
-        self.features = np.intersect1d(self.features,
-                                                 self.all_features, assume_unique=True)
-        assert len(self.features) > 0, ("No candidate feature found in the "
+        n_candidates = len(self.candidate_features)
+        self.all_candidate_features = self.feature_to_category[self.feature_name].unique()
+        self.candidate_features = np.intersect1d(self.candidate_features,
+                                                 self.all_candidate_features, assume_unique=True)
+        assert len(self.candidate_features) > 0, ("No candidate feature found in the "
                                    "first column of feature_to_category.")
-        if len(self.features) < n_candidates:
+        if len(self.candidate_features) < n_candidates:
             logging.warning("Only {} of the {} candidates are present "
                             "in feature_to_category mapping. "
-                            "Only those are going to be used.".format(len(self.features), n_candidates))
+                            "Only those are going to be used.".format(len(self.candidate_features), n_candidates))
         self.init_rank_table = self.initital_rank_table()
         self.rank_table = self.init_rank_table
         self.feature_df = feature_df
         self.ncpus = ncpus
+        self.value_name = value_name
 
 
     def _bind_feature_to_category(self, feature_to_category, feature_name, category_name):
@@ -158,13 +159,13 @@ class CandidateEnrichment(object):
 
 
 
-    def get_association(self, features):
+    def get_association(self, candidate_features):
         """
-        Get series with number of candidate features associated with each
+        Get series with number of candidate candidate_features associated with each
         category in feature_to_category.
         """
         try:
-            assoc = self.feature_to_category.set_index(self.feature_name).ix[features].groupby(self.category_name).apply(len)
+            assoc = self.feature_to_category.set_index(self.feature_name).ix[candidate_features].groupby(self.category_name).apply(len)
         except IndexError, e:
             raise e
         assoc.name = "n_" + self.feature_name
@@ -173,7 +174,7 @@ class CandidateEnrichment(object):
 
 
     def initital_rank_table(self):
-        real_assoc = self.get_association(self.features)
+        real_assoc = self.get_association(self.candidate_features)
         rt = init_rank_table(real_assoc)
         return rt
 
@@ -183,10 +184,10 @@ class CandidateEnrichment(object):
         """
         rt = rank_table.copy()
         for i in xrange(n_permut):
-            permut_features = np.random.choice(self.all_features,
-                                            size=len(self.features), replace=False)
-            assoc = self.get_association(permut_features)
-            rt["rank"] += (rt["n_features"] > assoc.reindex(rt.index).fillna(0))
+            permut_candidate_features = np.random.choice(self.all_candidate_features,
+                                            size=len(self.candidate_features), replace=False)
+            assoc = self.get_association(permut_candidate_features)
+            rt["rank"] += (rt["n_candidate_features"] > assoc.reindex(rt.index).fillna(0))
             rt["out_of"] += 1
             gc.collect() #needed for low memory profile
         rt.sort('rank',ascending=False,inplace=True)
@@ -210,18 +211,31 @@ class CandidateEnrichment(object):
     def get_pvals(self, pval_threshold=1, category_to_description=None):
         return rank_to_pval(self.rank_table, pval_threshold=1, category_to_description=None)
 
+    def create_info(self):
+        if self.feature_df is not None:
+            summary_per_feature = pd.DataFrame({self.value_name:self.feature_df[self.feature_name].\
+                                                                    apply(lambda x: x in self.candidate_features).values},
+                                                                            index=self.feature_df[self.feature_name].values)
+            summary_per_feature['zscore'] = (summary_per_feature[self.value_name]-summary_per_feature[self.value_name].mean())\
+                                            /summary_per_feature[self.value_name].std(ddof=0)
+            summary_per_feature.sort('zscore', ascending=False, inplace=True)
+            self.summary_per_feature = summary_per_feature
+        else:
+            self.summary_per_feature = None
 
-    def get_candidate_location(self):
-        """
-        for a list of gene ids,
-        get a data frame with their.
-        position
-        """
-        try:
-            gi = self.feature_df[self.feature_df[self.feature_name].apply(lambda x: x in self.features)]
-        except Exception, e:
-            raise e
-        return gi
+
+
+#    def get_candidate_location(self):
+#        """
+#        for a list of gene ids,
+#        get a data frame with their.
+#        position
+#        """
+#        try:
+#            gi = self.feature_df[self.feature_df[self.feature_name].apply(lambda x: x in self.features)]
+#        except Exception, e:
+#            raise e
+#        return gi
 
 
 
@@ -292,7 +306,7 @@ class SummaryEnrichment(CandidateEnrichment):
                             "in the features file. Removing them.".format(len(not_in_feature_df)))
             self.feature_to_category = self.feature_to_category.set_index(self.feature_name).\
                                                         drop(pd.Index(not_in_feature_df)).reset_index()
-        if min_features_per_cat>0:
+        if min_features_per_cat > 0:
             n_cats = len(self.feature_to_category[self.category_name].unique())
             logging.info("Removing categories for which there are less than {} "
                             "features in the features file.".format(min_features_per_cat))
@@ -368,6 +382,12 @@ class SummaryEnrichment(CandidateEnrichment):
         rank_table.sort('rank',ascending=False,inplace=True)
         return rank_table
 
+    def create_info(self):
+        summary_per_feature = self.get_summary_per_feature(self.value_s)
+        summary_per_feature['zscore'] = (summary_per_feature[self.value_name]-summary_per_feature[self.value_name].mean())\
+                                            /summary_per_feature[self.value_name].std(ddof=0)
+        summary_per_feature.sort('zscore', ascending=False, inplace=True)
+        self.summary_per_feature = summary_per_feature
 
 
 
@@ -437,112 +457,118 @@ class TopScoresEnrichment(SummaryEnrichment):
         #assoc.index.name = self.category_name
         return assoc
 
-    def get_info(self):
+    def create_info(self):
         value_s = self.value_s.sort(ascending=self.ascending, inplace=False)
         top_s = value_s.iloc[:self.top_n]
         self.candidate_features = hp.get_features(top_s, self.feature_df, feature_name=self.feature_name,
                                                                              max_dist=self.max_dist)
-        self.peaks_per_gene = get_peaks(cand_genes,gene_df, top_s, self..max_dist)
-        peak_info = get_peak_info(top_s,peaks_per_gene)
+        sub_feature_df = self.feature_df.reset_index().set_index(self.feature_name).ix[self.candidate_features]\
+                                                        .reset_index().set_index(['chrom','start'])
+        self.peaks_per_gene = get_peaks(sub_feature_df, top_s, self.max_dist, feature_name=self.feature_name)
+        genes_sort_by_max = self.peaks_per_gene['peak_height'].groupby(lambda i:i[0]).max()
+        genes_sort_by_max.sort(ascending=False,inplace=True)
+        self.peaks_per_gene = self.peaks_per_gene.ix[genes_sort_by_max.index]
+        self.top_peaks = get_peak_info(top_s, self.peaks_per_gene)
+        super(SummaryEnrichment, self).create_info()
 
-#general l I/O functions
-
-
-def read_table(file_handle,sep=None,**kwargs):
-    if sep is None:
-        sep = get_sep(file_handle.name)
-    try:
-        return pd.read_csv(file_handle,sep=sep,**kwargs)
-    except pd.parser.CParserError:
-        print file_handle
-        raise
-
-
-#these functions are needed in all modes
-
-
-def get_genes(peak_s, gene_df, max_dist):
-    """
-    take the input series and gets 
-    names of genes nearby
-
-    Input:
-    peak_s ... pandas series with (chrom, pos) index and value of
-                the statistic ('peak height'). Series should be named.
-    gene_df ... data frame with gene info 
-    """
-    all_genes = []
-    if not gene_df.index.is_monotonic:
-        gene_df = gene_df.sort_index()
-    tot_hit_df = pd.DataFrame()
-    for chrom in peak_s.index.droplevel(1).unique():
-        loc_gene_df = gene_df.ix[chrom]
-        #loc_gene_df = loc_gene_df.append(pd.DataFrame(np.nan,index=[np.inf],columns=loc_gene_df.columns))
-        pos_rel_to_start = np.searchsorted(loc_gene_df.index.values-max_dist,peak_s.ix[chrom].index.values)
-        pos_rel_to_end = np.searchsorted(loc_gene_df["end"].values+max_dist,peak_s.ix[chrom].index.values)
-        genes = list(set(loc_gene_df["gene_id"].iloc[np.hstack([range(a,b) for a,b in zip(pos_rel_to_end,pos_rel_to_start)])]))
-        all_genes += genes
-    return all_genes
-
-def get_top_n(value_s,top_q):
-    return int(len(value_s)*top_q)
-
-def permut_assoc(rod_s, rnd, gene_df, gene_to_go, top_n, max_dist, ascending):
-    """
-    This is the main function.
-    Use with rnd = 0 to get the real assoc.
-    """
-    s = shift_rod(rod_s, rnd)
-    s.sort(ascending=ascending, inplace=True)
-    top_s = s.iloc[:top_n].copy()
-    del s
-    gc.collect() #otherwise memory seems to leak
-    #print(gc.garbage)
-    cand_genes = get_genes(top_s, gene_df, max_dist=max_dist)
-    assoc = get_go_assoc(cand_genes, gene_to_go)
-    return assoc
-
-def get_go_assoc(gene_ls, gene_to_go):
-    """
-    Get series with number of genes associated with each
-    category in gene_to_go
-    """
-    s = gene_to_go.set_index("gene_symbol").ix[gene_ls].groupby("go_identifier").apply(len)
-    s.name = "n_genes"
-    s.index.name = "category"
-    return s
-
-
-
-
-def multiple_permut_assoc_low_mem(rod_s, init_rank_table, gene_df, gene_to_go, top_n, max_dist, n_runs, ascending, rnd_seed=None):
-    """
-    todo: Document!!!
-    """
-    if rnd_seed is not None:
-        np.random.seed(rnd_seed)
-    if not rod_s.index.is_monotonic:
-        rod_s = rod_s.sort_index()
-    for rnd in np.random.rand(n_runs):
-        assoc = permut_assoc(rod_s, rnd, gene_df, gene_to_go, 
-                                       top_n, max_dist, ascending)
-        init_rank_table["rank"] += (init_rank_table["n_genes"] > \
-                                    assoc.reindex(init_rank_table.index).fillna(0))
-        init_rank_table["out_of"] += 1
-    return init_rank_table
-
-def save_permut_assoc_table(assoc_table,fn):
-    assoc_table.to_csv(fn)
-
-#these functions are only needed in the reduce mode
-def get_gene_info(gene_ls,gene_df):
-    """
-    for a list of gene ids,
-    get a data frame with their 
-    position
-    """
-    gi = gene_df[gene_df["gene_id"].apply(lambda x: x in gene_ls)]
-    return gi
+##general l I/O functions
+#
+#
+#def read_table(file_handle,sep=None,**kwargs):
+#    if sep is None:
+#        sep = get_sep(file_handle.name)
+#    try:
+#        return pd.read_csv(file_handle,sep=sep,**kwargs)
+#    except pd.parser.CParserError:
+#        print file_handle
+#        raise
+#
+#
+##these functions are needed in all modes
+#
+#
+#def get_genes(peak_s, gene_df, max_dist):
+#    """
+#    take the input series and gets 
+#    names of genes nearby
+#
+#    Input:
+#    peak_s ... pandas series with (chrom, pos) index and value of
+#                the statistic ('peak height'). Series should be named.
+#    gene_df ... data frame with gene info 
+#    """
+#    all_genes = []
+#    if not gene_df.index.is_monotonic:
+#        gene_df = gene_df.sort_index()
+#    tot_hit_df = pd.DataFrame()
+#    for chrom in peak_s.index.droplevel(1).unique():
+#        loc_gene_df = gene_df.ix[chrom]
+#        #loc_gene_df = loc_gene_df.append(pd.DataFrame(np.nan,index=[np.inf],columns=loc_gene_df.columns))
+#        pos_rel_to_start = np.searchsorted(loc_gene_df.index.values-max_dist,peak_s.ix[chrom].index.values)
+#        pos_rel_to_end = np.searchsorted(loc_gene_df["end"].values+max_dist,peak_s.ix[chrom].index.values)
+#        genes = list(set(loc_gene_df["gene_id"].iloc[np.hstack([range(a,b) for a,b in zip(pos_rel_to_end,pos_rel_to_start)])]))
+#        all_genes += genes
+#    return all_genes
+#
+#def get_top_n(value_s,top_q):
+#    return int(len(value_s)*top_q)
+#
+#def permut_assoc(rod_s, rnd, gene_df, gene_to_go, top_n, max_dist, ascending):
+#    """
+#    This is the main function.
+#    Use with rnd = 0 to get the real assoc.
+#    """
+#    s = shift_rod(rod_s, rnd)
+#    s.sort(ascending=ascending, inplace=True)
+#    top_s = s.iloc[:top_n].copy()
+#    del s
+#    gc.collect() #otherwise memory seems to leak
+#    #print(gc.garbage)
+#    cand_genes = get_genes(top_s, gene_df, max_dist=max_dist)
+#    assoc = get_go_assoc(cand_genes, gene_to_go)
+#    return assoc
+#
+#def get_go_assoc(gene_ls, gene_to_go):
+#    """
+#    Get series with number of genes associated with each
+#    category in gene_to_go
+#    """
+#    s = gene_to_go.set_index("gene_symbol").ix[gene_ls].groupby("go_identifier").apply(len)
+#    s.name = "n_genes"
+#    s.index.name = "category"
+#    return s
+#
+#
+#
+#
+#def multiple_permut_assoc_low_mem(rod_s, init_rank_table, gene_df, gene_to_go, top_n, max_dist, n_runs, ascending, rnd_seed=None):
+#    """
+#    todo: Document!!!
+#    """
+#    if rnd_seed is not None:
+#        np.random.seed(rnd_seed)
+#    if not rod_s.index.is_monotonic:
+#        rod_s = rod_s.sort_index()
+#    for rnd in np.random.rand(n_runs):
+#        assoc = permut_assoc(rod_s, rnd, gene_df, gene_to_go, 
+#                                       top_n, max_dist, ascending)
+#        init_rank_table["rank"] += (init_rank_table["n_genes"] > \
+#                                    assoc.reindex(init_rank_table.index).fillna(0))
+#        init_rank_table["out_of"] += 1
+#    return init_rank_table
+#
+#def save_permut_assoc_table(assoc_table,fn):
+#    assoc_table.to_csv(fn)
+#
+##these functions are only needed in the reduce mode
+#def get_gene_info(gene_ls,gene_df):
+#    """
+#    for a list of gene ids,
+#    get a data frame with their 
+#    position
+#    """
+#    gi = gene_df[gene_df["gene_id"].apply(lambda x: x in gene_ls)]
+#    return gi
 
 def get_peaks(sub_gene_df,top_s,max_dist,feature_name):
     """
@@ -764,6 +790,7 @@ if __name__ == "__main__":
                                       "Test enrichment of features (e.g. genes) in certain categories.",
                                                                              add_help=False)
     parser.add_argument("-R",'--run_type', choices=['Permute','Reduce'])
+    parser.add_argument('-N','--name', help='Base name for all the output files. ')
     parser.add_argument("--feature_to_category", type=argparse.FileType('r'),
                                             help="Filename for tsv that links features to"
                                                     " categories. E.g. go associations. ")
@@ -787,10 +814,13 @@ if __name__ == "__main__":
                                                               ' and save the ranks of the real assocations compared to permutations.')
     permuteparser.add_argument('-M','--mode', choices=['Candidate', 'Summary', 'TopScores'], help='Enrichment method.')
     permuteparser.add_argument('--n_permut', type=int, default=0, help='Number of permutations or shifts.')
-    permuteparser.add_argument('--rank_table_out', type=argparse.FileType('w'), help='Filename to write rank table to. '
-                                                                                     'Use this option for multiple runs '
-                                                                                     'that are reduced in mode --M Reduce '
-                                                                                     'afterwards.')
+                                                                    #'Use this option for multiple runs '
+                                                                     #                'that are reduced in mode --M Reduce '
+                                                                      #               'afterwards.')
+    permuteparser.add_argument('--noinfo',action='store_true', help='Do not output additional info files such as '
+                                                                     'summary values per gene and do not output pvalues. '
+                                                                     'Use this option if you are running multiple permute '
+                                                                     'job that are reduced later.')
     permuteparser.add_argument("--ncpus", '-nct',
                             type=int, default=1, help='Number of cpus to use in parallel.')
 
@@ -801,10 +831,8 @@ if __name__ == "__main__":
                                                               ' to a single table of enrichment pvalues.')
     reduceparser.add_argument('--permuts', nargs='*',
                                            help='Filenames of permutation results of individual runs. '
-                                                ' (specified with --out in the permutation runs).')
-
-    reduceparser.add_argument('--pval_out', type=argparse.FileType('w'), help='Filename to write pvalue table to. '
-                                                                              'Imcompatible with rank_table_out.')
+                                                ' (specified with --name in the permutation runs).')
+    
     reduceparser.add_argument('--category_to_description',
                                  type=argparse.FileType('r'), help='Tsv with category to category description mapping.')
     reduceparser.add_argument('--category_to_description_cols', nargs=2, default = ['category', 'description'],
@@ -910,18 +938,10 @@ if __name__ == "__main__":
                                                            + permuteparser.format_help()
         help_str += "\n\n-----------Help for mode {} ------------\n\n".format(permute_args.mode) \
                                                            + modeparser.format_help()
-    if args.run_type == 'Reduce' or permute_args.rank_table_out is None:
+    if args.run_type == 'Reduce':
         reduce_args, unknown = reduceparser.parse_known_args(unknown)
         help_str += "\n\n-----------Help for Reduce step ------------\n\n" \
                                                            + reduceparser.format_help()
-        if reduce_args.pval_out is None:
-            reduceparser.error("argument --pval_out is required")
-        if args.run_type != 'Reduce':
-            if reduce_args.permuts is not None:
-                reduceparser.error("There should not be any --permuts input if running in Permute mode ")
-    else:
-        if 'pval_out' in unknown:
-            permuteparser.error('argument --pval_out is not supported if --rank_table_out is given')
 
     if args.help:
        logging.info(help_str)
@@ -938,18 +958,17 @@ if __name__ == "__main__":
 
     logger.setLevel(getattr(logging,args.logging_level))
 
-    #print args 
-    #if 'Reduce' in args.run_type:
-    #    print reduce_args
-    #if 'Permute' in args.run_type:
-    #    print permute_args
-    #    print mode_args
 
     logging.info("Loading feature to category mapping from {}.".format(args.feature_to_category.name))
     feature_to_category_cols = parse_cols(args.feature_to_category_cols)
     feature_to_category = pd.read_csv(args.feature_to_category,usecols=feature_to_category_cols,
                                                          sep=get_sep(args.feature_to_category.name))
     feature_to_category = feature_to_category[feature_to_category_cols]
+
+    #test whether name is writeable:
+    #we do not test all derived filenames, but this should be ok for most cases)
+    with open(args.name,'w') as test:
+        pass
 
     if args.run_type == 'Permute':
         if permute_args.mode is None:
@@ -1013,6 +1032,12 @@ if __name__ == "__main__":
             enrich = Enrichment(candidate_features,feature_to_category=feature_to_category,
                                                                feature_name=feature_to_category.columns[0],
                                                                category_name=feature_to_category.columns[1], **mode_args)
+        if not permute_args.noinfo:
+            enrich.create_info()
+            enrich.summary_per_feature.to_csv(args.name+'.summary_per_feature.tsv',sep='\t')
+            if permute_args.mode == 'TopScores':
+                enrich.top_peaks.to_csv(args.name+'.top_peaks.tsv',sep='\t')
+                enrich.peaks_per_gene.to_csv(args.name+'.peaks_per_gene.tsv',sep='\t')
         start = time.time()
         enrich.permute(permute_args.n_permut)
         end = time.time()
@@ -1020,10 +1045,10 @@ if __name__ == "__main__":
         logging.info("{} permutations took took {} seconds = {} minutes = {} hours.".format(permute_args.n_permut,
                                                                                             delta,delta/60.,delta/3600.))
 
-        if permute_args.rank_table_out is not None:
-            enrich.rank_table.to_csv(permute_args.rank_table_out, sep='\t', header=True)
+        if permute_args.noinfo:
+            enrich.rank_table.to_csv(args.name+'.ranktable.tsv', sep='\t', header=True)
         else:
-            enrich.get_pvals().to_csv(reduce_args.pval_out, sep='\t', header=True)
+            enrich.get_pvals().to_csv(args.name+'.pvals.tsv', sep='\t', header=True)
 
     elif args.run_type == 'Reduce':
         if reduce_args.permuts is None:
@@ -1043,5 +1068,5 @@ if __name__ == "__main__":
                             category_to_description=cat_to_desc)
 
 
-        p_val_df.to_csv(reduce_args.pval_out, sep='\t')
+        p_val_df.to_csv(args.name+'.pvals.tsv', sep='\t')
 
