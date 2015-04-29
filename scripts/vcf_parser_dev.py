@@ -924,6 +924,74 @@ class VCFTo012(Parser):
         p.communicate()
 
 
+class VCFStats(Parser):
+    """
+    Print some statistics about the variants in the vcf.
+    """
+    args ={
+        'out_fn':
+            {'required':True,
+             'type':argparse.FileType('w'),
+             'help':"File path to write output json to."}
+        }
+
+
+    def __init__(self, **kwa):
+        self.var_stats = {}
+        self.filters = {}
+
+    def parse_fun(self, line):
+        add = lambda s: add_to_countdic(self.var_stats,s)
+        addf = lambda s: add_to_countdic(self.filters,s)
+        add('total')
+        info = get_info_dic(line)
+        ref = line[3]
+        alt = line[4].split(',')
+        pass0 = (line[6] in ['PASS','Pass'])
+        if len(alt) > 1:
+            add('multiallelic')
+        elif len(ref) > 1 or len(alt[0]) > 1:
+            add('indels')
+        elif alt[0] in nucleotides:
+            if float(info['AF'])>0 and float(info['AF'])<1:
+                if pass0:
+                    add('pass_snp')
+                else:
+                    add('filter_snp')
+                    for f in line[6].split(';'):
+                        addf(f)
+            else:
+                add('snp_non_seg')
+
+        else:
+            logging.warning("Unknown variant type at {} - {}: {}".format(line[0],line[1],line[4]))
+
+
+        try:
+            aa = info['AA']
+        except KeyError:
+            return
+        if aa in nucleotides:
+            add('ancestral_known')
+            if pass0 and len(alt) == 1 and float(info['AF'])>0 and float(info['AF'])<1:
+                add('pass_ancestral_known')
+                if aa == ref:
+                    add('pass_snp_ancestral_is_ref')
+                elif aa == alt[0]:
+                    add('pass_snp_ancestral_is_alt')
+                else:
+                    add('pass_snp_ancestral_is_third_allele')
+
+
+
+
+    def reduce_fun(self, selfs):
+        self.var_stats = sum_countdics([s.var_stats for s in selfs])
+        self.filters = sum_countdics([s.filters for s in selfs])
+
+    def output_fun(self):
+        self.var_stats['filters'] = self.filters
+        json.dump(self.var_stats, self.out_fn)
 
 class FilterByBed(Parser):
     """
@@ -1068,34 +1136,34 @@ class AccessibleGenomeStats(Parser):
             category = 'pass_'
         else:
             category = 'filter_'
-#        try:
-#            af = float(get_info_dic(line)['AF'].split(',')[0])
-#            if len(alt) == 1 and len(ref) == 1 and len(alt[0]) == 1 and alt[0] in nucleotides and af>0 and af<1:
-#                category += 'snp'
-#            else:
-#                category += 'nosnp'
-#        except KeyError:
-#            category += 'nosnp'
-
-        #test where the discrepancy to SNPstats comes from....
         try:
             af = float(get_info_dic(line)['AF'].split(',')[0])
-            if len(alt) != 1: #and len(ref) == 1 and len(alt[0]) == 1 and alt[0] in nucleotides and af>0 and af<1:
-                category += 'altgt1'
-            elif len(ref) != 1:
-                category += 'refgt1'
-            elif len(alt[0])>1:
-                category += 'alt0gt1'
-            elif alt[0] not in nucleotides:
-                category += '?allele'
-            elif af==0:
-                category += 'af0'
-            elif af==1:
-                category += 'af1'
-            else:
+            if len(alt) == 1 and len(ref) == 1 and len(alt[0]) == 1 and alt[0] in nucleotides and af>0 and af<1:
                 category += 'snp'
+            else:
+                category += 'nosnp'
         except KeyError:
-            category += 'noaf'
+            category += 'nosnp'
+
+        #test where the discrepancy to SNPstats comes from....
+#        try:
+#            af = float(get_info_dic(line)['AF'].split(',')[0])
+#            if len(alt) != 1: #and len(ref) == 1 and len(alt[0]) == 1 and alt[0] in nucleotides and af>0 and af<1:
+#                category += 'altgt1'
+#            elif len(ref) != 1:
+#                category += 'refgt1'
+#            elif len(alt[0])>1:
+#                category += 'alt0gt1'
+#            elif alt[0] not in nucleotides:
+#                category += '?allele'
+#            elif af==0:
+#                category += 'af0'
+#            elif af==1:
+#                category += 'af1'
+#            else:
+#                category += 'snp'
+#        except KeyError:
+#            category += 'noaf'
 
         add(category)
         try:
