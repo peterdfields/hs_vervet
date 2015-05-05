@@ -391,7 +391,7 @@ class Step(BaseClass):
         for job in jobs:
             self.append_job(job)
 
-    def run(self,mode=None,print_summary=False,parallel=False,nprocs='auto'):
+    def run(self,mode=None,print_summary=False,parallel=False,nprocs='auto', depend_step=None):
         modes=['qsub','scratch_run','write_jobscripts','project_run']
         if mode is None:
             mode = self.default_run
@@ -405,6 +405,8 @@ class Step(BaseClass):
             if self.analysis.host == 'workstation':
                 raise Exception("mode qsub not available on workstation. Run on the cluster.")
             self.run_type = 'qsub'
+            if depend_step is not None:
+                self.depend_dic = depend_step.submit_dic #improve this!!!
             self.qsub()
         elif mode == 'scratch_run':
             #if self.analysis.host == 'workstation':
@@ -504,9 +506,18 @@ class Step(BaseClass):
             self.stageout_job.write_prepare_jobscript()
         if self.stagein_job is not None:
             self.stagein_job.stage(run_type='submit')
+        #hacky solution to allow dependent on runtime
+        self.submit_dic = {}
         for job in self.jobs:
+            try: 
+                job.afterok.append(self.depend_dic[job.id])
+            except AttributeError:
+                pass
             job.write_jobscript()
-            job.qsub_jobscript()
+            pbs_id = job.qsub_jobscript()
+
+            self.submit_dic.update({job.id:pbs_id})
+
             self.vprint("sleep {}...".format(sleep),mv=1)
             time.sleep(sleep)
         if self.stageout_job is not None:

@@ -96,6 +96,9 @@ class Walker(object):
         self.in_fh = in_fh
         self.sep = sep
         self.parser = parser
+        #test this
+        #self.parser.walker = self
+        self.parser.in_fh = in_fh
         self.skip_multiple_entries = skip_multiple_entries
         self.progress_report_interval = progress_report_interval
         self.finished = False
@@ -641,6 +644,13 @@ def get_012(gt_str):
     else:
         raise ValueError("Unsupported genotype " + gt_str)
 
+def revert_gt(gt):
+    if gt == '0':
+        gt = '2'
+    elif gt == '2':
+        gt = '0'
+    return gt
+
 
 def get_AA(info_str):
     aa = info_str.split("AA=")[1][0]
@@ -903,11 +913,10 @@ class VCFTo012(Parser):
     and 2 for homozygous alternative allele.
     Missing genotypes are coded by 'N'
     """
-    args ={
-        'out_tsv':
-            {'required':True,
-             'type':argparse.FileType('w'),
-             'help':"File path to write output tsv to."}
+    args ={ 'out_tsv':
+                {'required':True,
+                'type':argparse.FileType('w'),
+                'help':"File path to write output tsv to."}
         }
 
     def header_fun(self,line):
@@ -923,6 +932,48 @@ class VCFTo012(Parser):
         p = subprocess.Popen(command, stdout=self.out_tsv)
         p.communicate()
 
+
+class VCFToAncDer012(LineWriteParser):
+    args = {'exclude_fixed':{'action':'store_true',
+                      'help':'Exclude sites that are fixed '
+                           'to outgroup but not seggregating.'},
+             'out_tsv':
+                {'required':True,
+                'type':argparse.FileType('w'),
+                'help':"File path to write output tsv to."}}
+
+    def __init__(self,**kwa):
+        self.nts = ['A','C','T','G']
+
+    def header_fun(self,line):
+        if line[1:6] == "CHROM":
+            self.out_tsv.write("chrom\tpos\t"+line.split("\t",9)[-1])
+
+    def parse_fun(self, sline):
+        pos = int(sline[1])
+        chrom = sline[0]
+        ref = sline[3]
+        alt = sline[4].split(',')
+        try:
+            aa = get_AA(sline[7])
+        except IndexError:
+            aa = None
+        if sline[6] not in ['.','PASS']: #ignore filterd sites
+            pass
+        elif aa not in self.nts: #ignore sites with no ancestral state
+            pass
+        elif len(alt)>1: #ignore multiallelic sites
+            pass
+        elif len(ref)>1 or len(alt[0])>1: #ignore indels
+            pass
+        elif aa != ref and \
+            (aa != alt[0] and alt[0] in self.nts): #ignore sites where ancestral is 3rd allele
+            pass
+        elif alt[0] in self.nts or aa != ref: #ingore non-polymporphic non substituted
+            gt = map(get_012,sline[9:])
+            if aa == alt[0]:
+                gt = map(revert_gt, gt)
+            self.out_tsv.write('{}\t{}\t{}\n'.format(chrom,pos,"\t".join(gt)))
 
 class VCFStats(Parser):
     """
@@ -1172,7 +1223,9 @@ class AccessibleGenomeStats(Parser):
              self.N_df[category] = ns
 
     def reduce_fun(self, selfs):
-        self.N_df = sum([s.N_df for s in selfs])
+        #self.N_df = sum([s.N_df for s in selfs])
+        self.N_df = reduce(lambda df0, df1: df0.add(df1, fill_value=0), [s.N_df for s in selfs])
+        self.N_df = self.N_df.astype(int)
         self.sites_dic = sum_countdics([s.sites_dic for s in selfs])
         self.Nxy = sum([s.Nxy for s in selfs])
 
@@ -1191,6 +1244,57 @@ class AccessibleGenomeStats(Parser):
         #    return (sites_dic, N_df, corr)
 
 
+
+class AddFilterInfo(Parser):
+    """
+    Adds info header entries for each pair
+    in expressions/descriptions iterables to
+    in_vcf and writes it to out_vcf
+    """
+    args = {
+        'expressions': {'required':True,
+                        'nargs':'+',
+                        'help':"List of filter expressions to add to the vcf header."},
+        'descriptions': {'required':True,
+                        'nargs':'+',
+                        'help':'List of filter descriptions to add to the vcf header.'},
+         'out_vcf': {'required':True,
+                     'type': argparse.FileType('w'),
+                      'help':"Filepath to write output vcf to."}}
+    def __init__(self,**kwa):
+        self.line_counter = 0
+        self.filter_found = False
+        self.filters_added = False
+
+    def header_fun(self,line):
+        self.line_counter += 1
+        b = len("##FILTER=<ID=")
+        if line[:b] == "##FILTER=<ID=":
+            logging.debug("Exisitng filter found: {}".format(line))
+            self.filter_found = True
+            for j,e in enumerate(self.expressions):
+                if line[b:b+len(e)] == e:
+                    line = line[:b+len(e)+len(',Description="')] + self.descriptions[j] + '">\n'
+                    logging.info("Updating filter expression {}.".format(e))
+                    del self.expressions[j]
+                    del self.descriptions[j]
+                    break
+        elif not self.filters_added and (self.filter_found or (line[:6] == '#CHROM')):
+            for e,d in zip(self.expressions,self.descriptions):
+                self.out_vcf.write('##FILTER=<ID=' + e + ',Description="' + d + '">\n')
+                logging.info("Adding filter expression {}.".format(e))
+            self.filters_added = True
+        self.out_vcf.write(line)
+
+
+
+    def cleanup_fun(self):
+        self.out_vcf.flush()
+        logging.info("Starting to cat vcf body.")
+        command = ["tail","-n +" + str(self.line_counter+1),self.in_fh.name]
+        p = subprocess.Popen(" ".join(command),shell=True,stdout=self.out_vcf)
+        #p.wait()
+        p.communicate()
 
 
 
