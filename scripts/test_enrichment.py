@@ -91,7 +91,7 @@ def get_genes(peak_s, gene_df, max_dist):
         #loc_gene_df = loc_gene_df.append(pd.DataFrame(np.nan,index=[np.inf],columns=loc_gene_df.columns))
         pos_rel_to_start = np.searchsorted(loc_gene_df.index.values-max_dist,peak_s.ix[chrom].index.values)
         pos_rel_to_end = np.searchsorted(loc_gene_df["end"].values+max_dist,peak_s.ix[chrom].index.values)
-        genes = list(set(loc_gene_df["gene_id"].iloc[np.hstack([range(a,b) for a,b in zip(pos_rel_to_end,pos_rel_to_start)])]))
+        genes = list(set(loc_gene_df["symbol"].iloc[np.hstack([range(a,b) for a,b in zip(pos_rel_to_end,pos_rel_to_start)])]))
         all_genes += genes
     return all_genes
 
@@ -118,7 +118,13 @@ def get_go_assoc(gene_ls, gene_to_go):
     Get series with number of genes associated with each
     category in gene_to_go
     """
-    s = gene_to_go.set_index("gene_symbol").ix[gene_ls].groupby("go_identifier").apply(len)
+    #print(gene_to_go)
+    try:
+        s = gene_to_go.set_index("gene_symbol").ix[gene_ls].groupby("go_identifier").apply(len)
+    except Exception, e:
+        print(gene_ls)
+        print(gene_to_go.set_index("gene_symbol"))
+        raise e
     s.name = "n_genes"
     s.index.name = "category"
     return s
@@ -168,7 +174,8 @@ def get_gene_info(gene_ls,gene_df):
     get a data frame with their 
     position
     """
-    gi = gene_df[gene_df["gene_id"].apply(lambda x: x in gene_ls)]
+    gi = gene_df[gene_df["symbol"].apply(lambda x: x in gene_ls)]
+    #print(gene_df)
     return gi
 
 def get_peaks(gene_ls,gene_df,top_s,max_dist):
@@ -181,7 +188,7 @@ def get_peaks(gene_ls,gene_df,top_s,max_dist):
     
     Input:
     gene_info ... data frame with index ('chrom','start')
-                and columns 'gene_id' and 'end'
+                and columns 'symbol' and 'end'
     top_s ... series of peak positions with index (chrom, pos)
                 and values peak height
     max_dist ... maximum distance between gene and peak
@@ -205,18 +212,18 @@ def get_peaks(gene_ls,gene_df,top_s,max_dist):
         end = np.searchsorted(loc_top_s.index.values-max_dist,gene_info.ix[chrom]["end"].values)
         
         x = pd.concat([loc_top_s.iloc[st:ed] for st,ed in zip(start,end)],
-                      keys=gene_info.ix[chrom]["gene_id"].values)
+                      keys=gene_info.ix[chrom]["symbol"].values)
         x.name = "peak_height"
         
 
 
         dist_start = x.groupby(lambda i: i[0]).\
                     apply(lambda df: get_dist(df,
-                                              gene_info.ix[chrom].reset_index().set_index("gene_id")["pos"]))
+                                              gene_info.ix[chrom].reset_index().set_index("symbol")["start"]))
         dist_start.name = "dist_start"
         dist_end = x.groupby(lambda i: i[0]).\
                     apply(lambda df: get_dist(df,
-                                              gene_info.ix[chrom].set_index("gene_id")["end"]))
+                                              gene_info.ix[chrom].set_index("symbol")["end"]))
         dist_end.name = "dist_end"
         gene_peaks_df = pd.concat([x,dist_start,dist_end],axis=1)
         gene_peaks_df.index = pd.MultiIndex.from_arrays([gene_peaks_df.index.droplevel(1),
@@ -225,13 +232,13 @@ def get_peaks(gene_ls,gene_df,top_s,max_dist):
         tot_gene_peaks_df = pd.concat([tot_gene_peaks_df, gene_peaks_df],axis=0)
             
 
-    tot_gene_peaks_df.index.names = ["gene_id","chrom","peak_pos"]
+    tot_gene_peaks_df.index.names = ["symbol","chrom","peak_pos"]
     return tot_gene_peaks_df
 
 
 def get_peak_info(top_s,peaks_per_gene):
     peak_height_name = top_s.name
-    gene_list_peak_pos = peaks_per_gene.reset_index([0])["gene_id"].groupby(lambda x: x).apply(list)
+    gene_list_peak_pos = peaks_per_gene.reset_index([0])["symbol"].groupby(lambda x: x).apply(list)
     gene_list_peak_pos.name = "genes"
     gene_list_peak_pos.index = pd.MultiIndex.from_tuples(gene_list_peak_pos.index)
     peak_info = pd.concat([top_s,gene_list_peak_pos],axis=1)
@@ -378,7 +385,7 @@ if __name__ == "__main__":
   
         p.add_argument("--gene_df_fn", type=argparse.FileType('r'), 
                                         help="Filename of the gene info dataframe "
-                                             " with index (chrom,start) and columns 'gene_id', 'end'",
+                                             " with index (chrom,start) and columns 'symbol', 'end'",
                                                                 required=True)
         g2 = p.add_mutually_exclusive_group(required=False)
         g2.add_argument("--ascending",dest="ascending",action="store_true",help="Sort ascending, (e.g., for p-values).")
@@ -399,7 +406,7 @@ if __name__ == "__main__":
     parser_b.add_argument("--pval_sign_thresh",type=float,
                                                         help="P value threhold for pval_sign_out.")
     parser_b.add_argument("--peaks_per_gene_fn",type=argparse.FileType('r'),help="File path of gene info as produced in"
-                                                                            " real assoc mode. must have a column gene_id.")
+                                                                            " real assoc mode. must have a column symbol.")
 
     parser_b.add_argument("--log_fn",type=argparse.FileType('w'),help="File to append output log to.")
 
@@ -417,7 +424,7 @@ if __name__ == "__main__":
         printv("Interpreted input arguments as:")
         printv(args)
 
-    gene_to_cat = read_table(args.gene_to_cat_fn,index_col=[0])
+    gene_to_cat = read_table(args.gene_to_cat_fn)#,index_col=[0])
 
 
     if args.mode == "real_assoc" or args.mode == "permutation":
@@ -432,6 +439,8 @@ if __name__ == "__main__":
         assert isinstance(value_s,pd.core.series.Series)
 
         gene_df = read_table(args.gene_df_fn,index_col=[0,1])
+        #print(gene_df)
+        #sys.exit(1)
 
         if args.top_n is not None:
             top_n = args.top_n
@@ -459,7 +468,8 @@ if __name__ == "__main__":
             top_s = value_s.iloc[:top_n]
             del value_s
             cand_genes = get_genes(top_s, gene_df, max_dist=args.max_dist)
-
+            #print(cand_genes)
+            #sys.exit(1)
             #save peak info for candidate genes:
             peaks_per_gene = get_peaks(cand_genes,gene_df,top_s,args.max_dist)
             peaks_per_gene.to_csv(args.peaks_per_gene_fn,sep=ppg_sep)
@@ -538,7 +548,7 @@ if __name__ == "__main__":
 
         # get a list of genes per go category
         try:
-            cand_genes = np.unique(read_table(args.peaks_per_gene_fn,usecols=["gene_id"]).values)
+            cand_genes = np.unique(read_table(args.peaks_per_gene_fn,usecols=["symbol"]).values)
             gene_per_go_s = get_genes_per_go(cand_genes, gene_to_cat)
             p_val_df = pd.concat([p_val_df, gene_per_go_s], axis=1)
             def check_len(el):

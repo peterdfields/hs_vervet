@@ -884,9 +884,10 @@ class Job(BaseClass):
                         ("," if afterok_str and afterany_str else "") + \
                                                                afterany_str)
 
-
-        command = 'qsub -h {0} {1}'.format(depend_str,
+        command = 'qsub -m n -h {0} {1}'.format(depend_str,
                                            os.path.expanduser(self.file_name)+self.ext)
+        #print('qsub -m n')
+        #print(command)
         p = subprocess.Popen(command, shell=True, 
                                  stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         
@@ -1425,7 +1426,11 @@ class Command(object):
             try:
                 self.command = self.command.format(**callingframe)
             except KeyError:
-                print "The dict used for formating:", callingframe
+                callingframe2 = sys._getframe(1).f_globals
+                callingframe2.update(callingframe)
+                self.command = self.command.format(**callingframe2)
+            except KeyError:
+                print "The dict used for formating:", callingframe2
                 raise
     
     def bind_to_job(self,job):

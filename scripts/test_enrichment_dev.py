@@ -932,7 +932,10 @@ if __name__ == "__main__":
 
     if  args.run_type == 'Permute':
         permute_args, unknown = permuteparser.parse_known_args(unknown)
-        modeparser = modeparsers.choices[permute_args.mode]
+        if permute_args.mode is not None:
+            modeparser = modeparsers.choices[permute_args.mode]
+        else:
+            permuteparser.error("argument --mode/-M is required")
         mode_args, unknown = modeparser.parse_known_args(unknown)
         help_str += "\n\n-----------Help for Permute step ------------\n\n" \
                                                            + permuteparser.format_help()
@@ -967,13 +970,9 @@ if __name__ == "__main__":
 
     #test whether name is writeable:
     #we do not test all derived filenames, but this should be ok for most cases)
-    with open(args.name,'w') as test:
-        pass
+    assert os.access(args.name, os.W_OK)), "{} cannot be accessed for writing".format(args.name)
 
     if args.run_type == 'Permute':
-        if permute_args.mode is None:
-            permuteparser.error("argument --mode/-M is required")
-
 
         Enrichment = mode_classes[permute_args.mode]
         mode_args = {arg:getattr(mode_args,arg) for arg in vars(mode_args)}
@@ -1017,7 +1016,8 @@ if __name__ == "__main__":
             rod_cols = parse_cols(mode_args.pop('rod_cols'))
             rod_fh = mode_args.pop('rod')
             rod_s = pd.read_csv(rod_fh, index_col=[0,1],
-                                        usecols=rod_cols, sep=get_sep(rod_fh), squeeze=True)
+                                        usecols=rod_cols, sep=get_sep(rod_fh), squeeze=True)#,
+                                        #header=False if type(rod_cols[0])==int else True)
             rod_s.index.set_names(['chrom','pos'], inplace=True)
 
             enrich = Enrichment(value_s=rod_s, feature_df=feature_df,
