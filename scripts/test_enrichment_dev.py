@@ -212,16 +212,23 @@ class CandidateEnrichment(object):
         return rank_to_pval(self.rank_table, pval_threshold=1, category_to_description=None)
 
     def create_info(self):
-        if self.feature_df is not None:
-            summary_per_feature = pd.DataFrame({self.value_name:self.feature_df[self.feature_name].\
-                                                                    apply(lambda x: x in self.candidate_features).values},
-                                                                            index=self.feature_df[self.feature_name].values)
-            summary_per_feature['zscore'] = (summary_per_feature[self.value_name]-summary_per_feature[self.value_name].mean())\
-                                            /summary_per_feature[self.value_name].std(ddof=0)
-            summary_per_feature.sort('zscore', ascending=False, inplace=True)
-            self.summary_per_feature = summary_per_feature
-        else:
-            self.summary_per_feature = None
+        """
+        Creates an attribute self.summary_per_feature.
+
+        For CandidateEnrichment or TopScoresEnrichment 
+        this data frame contains a boolean variable for
+        each gene that is True if the gene is in the caniditate set.
+        For SummaryEnrichment this attribute gives the summary 
+        for each gene.
+        """
+        assert self.feature_df is not None, "Cannot create info without feature_df"
+        summary_per_feature = pd.DataFrame({self.value_name:self.feature_df[self.feature_name].\
+                                                                apply(lambda x: x in self.candidate_features).values},
+                                                                        index=self.feature_df[self.feature_name].values)
+        summary_per_feature['zscore'] = (summary_per_feature[self.value_name]-summary_per_feature[self.value_name].mean())\
+                                        /summary_per_feature[self.value_name].std(ddof=0)
+        summary_per_feature.sort('zscore', ascending=False, inplace=True)
+        self.summary_per_feature = summary_per_feature
 
 
 
@@ -458,17 +465,24 @@ class TopScoresEnrichment(SummaryEnrichment):
         return assoc
 
     def create_info(self):
+        """
+        Creates several info dataframe for the input data.
+        self.peaks_per_feature .... top peaks per feature for features that
+                                are hit by top peaks
+                            
+        self.top_peaks ... top peaks with the features that are close
+        """
         value_s = self.value_s.sort(ascending=self.ascending, inplace=False)
         top_s = value_s.iloc[:self.top_n]
         self.candidate_features = hp.get_features(top_s, self.feature_df, feature_name=self.feature_name,
                                                                              max_dist=self.max_dist)
         sub_feature_df = self.feature_df.reset_index().set_index(self.feature_name).ix[self.candidate_features]\
                                                         .reset_index().set_index(['chrom','start'])
-        self.peaks_per_gene = get_peaks(sub_feature_df, top_s, self.max_dist, feature_name=self.feature_name)
-        genes_sort_by_max = self.peaks_per_gene['peak_height'].groupby(lambda i:i[0]).max()
-        genes_sort_by_max.sort(ascending=False,inplace=True)
-        self.peaks_per_gene = self.peaks_per_gene.ix[genes_sort_by_max.index]
-        self.top_peaks = get_peak_info(top_s, self.peaks_per_gene)
+        self.peaks_per_feature = get_peaks(sub_feature_df, top_s, self.max_dist, feature_name=self.feature_name)
+        features_sort_by_max = self.peaks_per_feature['peak_height'].groupby(lambda i:i[0]).max()
+        features_sort_by_max.sort(ascending=False,inplace=True)
+        self.peaks_per_feature = self.peaks_per_feature.ix[features_sort_by_max.index]
+        self.top_peaks = get_peak_info(top_s, self.peaks_per_feature)
         super(SummaryEnrichment, self).create_info()
 
 ##general l I/O functions
@@ -970,7 +984,7 @@ if __name__ == "__main__":
 
     #test whether name is writeable:
     #we do not test all derived filenames, but this should be ok for most cases)
-    assert os.access(args.name, os.W_OK)), "{} cannot be accessed for writing".format(args.name)
+    assert os.access(args.name, os.W_OK), "{} cannot be accessed for writing".format(args.name)
 
     if args.run_type == 'Permute':
 
