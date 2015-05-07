@@ -466,7 +466,7 @@ class TopScoresEnrichment(SummaryEnrichment):
         del value_s
         candidate_features = hp.get_features(top_s, self.feature_df, feature_name=self.feature_name,
                                                                              max_dist=self.max_dist)
-        assoc = super(SummaryEnrichment, self).get_association(candidate_features)
+        assoc = CandidateEnrichment.get_association(self, candidate_features)
         #assoc = self.feature_to_category.set_index(self.feature_name).ix[cand_genes].groupby(self.category_name).apply(len)
         #assoc.name = "n_" + self.feature_name
         #assoc.index.name = self.category_name
@@ -502,7 +502,8 @@ class TopScoresEnrichment(SummaryEnrichment):
         features_sort_by_max.sort(ascending=False,inplace=True)
         self.peaks_per_feature = self.peaks_per_feature.ix[features_sort_by_max.index]
         self.top_peaks = self.get_peak_info(top_s, self.peaks_per_feature)
-        super(SummaryEnrichment, self).create_info()
+        #super(SummaryEnrichment, self).create_info()
+        CandidateEnrichment.create_info(self)
 
 
 def get_peaks(sub_gene_df,top_s,max_dist,feature_name):
@@ -512,7 +513,13 @@ def get_peaks(sub_gene_df,top_s,max_dist,feature_name):
     is basically reverse engineering to get
     the peak info for each gene that was found 
     to be associated with a peak. 
-    
+    The reason for reverse engeneering rather than 
+    storing this information when searching for the genes
+    for each peak is that we want to use precisely the same
+    function to search the genes for the real data and for the 
+    permutations.
+
+
     Input:
     gene_info ... data frame with index ('chrom','start')
                 and columns 'gene_id' and 'end'
@@ -532,8 +539,12 @@ def get_peaks(sub_gene_df,top_s,max_dist,feature_name):
         return s
     tot_gene_peaks_df = pd.DataFrame()
     if not top_s.index.is_monotonic:
+        #print "sorting"
         top_s = top_s.sort_index()
+    if not gene_info.index.is_monotonic:
+        gene_info = gene_info.sort_index()
     for chrom in gene_info.index.droplevel(1).unique():
+        print chrom
         loc_top_s = top_s.ix[chrom]
         start = np.searchsorted(loc_top_s.index.values+max_dist,gene_info.ix[chrom].index.values)
         end = np.searchsorted(loc_top_s.index.values-max_dist,gene_info.ix[chrom]["end"].values)
@@ -574,6 +585,7 @@ def get_peaks(sub_gene_df,top_s,max_dist,feature_name):
             
 
     tot_gene_peaks_df.index.names = [feature_name,"chrom","peak_pos"]
+    print "finished"
     return tot_gene_peaks_df
 
 
