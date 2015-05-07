@@ -435,7 +435,8 @@ class TopScoresEnrichment(SummaryEnrichment):
         assert feature_name in feature_df.columns
         assert top_type in top_types, "top_type must be one of {}".format(top_types)
         self.value_s = value_s.copy()
-        self.feature_df = feature_df.copy()
+        #the following prevents get_peaks from throwing unspecific error
+        self.feature_df = feature_df.drop_duplicates(subset=feature_name)
         self._bind_feature_to_category(feature_to_category, feature_name,  category_name)
         self.value_name = self.value_s.name
 
@@ -534,38 +535,18 @@ def get_peaks(sub_gene_df,top_s,max_dist,feature_name):
         """
         s = pd.Series(df.index.droplevel(0).values - gene_pos.ix[df.index[0][0]],
                                                   index=df.index.droplevel(0).values)
-        #df = pd.DataFrame(df.index.droplevel(0).values - gene_pos.ix[df.index[0][0]],
-        #                                          index=df.index.droplevel(0).values)
         return s
     tot_gene_peaks_df = pd.DataFrame()
     if not top_s.index.is_monotonic:
-        #print "sorting"
-        top_s = top_s.sort_index()
+        top_s = top_s.sortlevel([0,1])
     if not gene_info.index.is_monotonic:
         gene_info = gene_info.sort_index()
     for chrom in gene_info.index.droplevel(1).unique():
-        print chrom
         loc_top_s = top_s.ix[chrom]
         start = np.searchsorted(loc_top_s.index.values+max_dist,gene_info.ix[chrom].index.values)
         end = np.searchsorted(loc_top_s.index.values-max_dist,gene_info.ix[chrom]["end"].values)
-        #try:
         x = pd.concat([loc_top_s.iloc[st:ed] for st,ed in zip(start,end)],
                           keys=gene_info.ix[chrom][feature_name].values)
-#            print "worked"
-#            print chrom 
-#            test = pd.concat([loc_top_s.iloc[st:ed] for st,ed in zip(start,end)])
-#            print test
-#            print test.shape
-#            print gene_info.ix[chrom][feature_name].shape
-#            print [loc_top_s.iloc[st:ed].shape for st,ed in zip(start,end)]
-#        except Exception, e:
-#            print "error"
-#            print chrom 
-#            test = pd.concat([loc_top_s.iloc[st:ed] for st,ed in zip(start,end)])
-#            print test
-#            print test.shape
-#            print gene_info.ix[chrom][feature_name].shape
-#            print [loc_top_s.iloc[st:ed].shape for st,ed in zip(start,end)]
         x.name = "peak_height"
 
 
@@ -585,7 +566,6 @@ def get_peaks(sub_gene_df,top_s,max_dist,feature_name):
             
 
     tot_gene_peaks_df.index.names = [feature_name,"chrom","peak_pos"]
-    print "finished"
     return tot_gene_peaks_df
 
 
