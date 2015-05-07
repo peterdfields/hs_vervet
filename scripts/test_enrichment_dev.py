@@ -537,24 +537,24 @@ def get_peaks(sub_gene_df,top_s,max_dist,feature_name):
         loc_top_s = top_s.ix[chrom]
         start = np.searchsorted(loc_top_s.index.values+max_dist,gene_info.ix[chrom].index.values)
         end = np.searchsorted(loc_top_s.index.values-max_dist,gene_info.ix[chrom]["end"].values)
-        try:
-            x = pd.concat([loc_top_s.iloc[st:ed] for st,ed in zip(start,end)],
+        #try:
+        x = pd.concat([loc_top_s.iloc[st:ed] for st,ed in zip(start,end)],
                           keys=gene_info.ix[chrom][feature_name].values)
-            print "worked"
-            print chrom 
-            test = pd.concat([loc_top_s.iloc[st:ed] for st,ed in zip(start,end)])
-            print test
-            print test.shape
-            print gene_info.ix[chrom][feature_name].shape
-            print [loc_top_s.iloc[st:ed].shape for st,ed in zip(start,end)]
-        except Exception, e:
-            print "error"
-            print chrom 
-            test = pd.concat([loc_top_s.iloc[st:ed] for st,ed in zip(start,end)])
-            print test
-            print test.shape
-            print gene_info.ix[chrom][feature_name].shape
-            print [loc_top_s.iloc[st:ed].shape for st,ed in zip(start,end)]
+#            print "worked"
+#            print chrom 
+#            test = pd.concat([loc_top_s.iloc[st:ed] for st,ed in zip(start,end)])
+#            print test
+#            print test.shape
+#            print gene_info.ix[chrom][feature_name].shape
+#            print [loc_top_s.iloc[st:ed].shape for st,ed in zip(start,end)]
+#        except Exception, e:
+#            print "error"
+#            print chrom 
+#            test = pd.concat([loc_top_s.iloc[st:ed] for st,ed in zip(start,end)])
+#            print test
+#            print test.shape
+#            print gene_info.ix[chrom][feature_name].shape
+#            print [loc_top_s.iloc[st:ed].shape for st,ed in zip(start,end)]
         x.name = "peak_height"
 
 
