@@ -238,6 +238,10 @@ class SerialWalker(Walker):
         self.auto_tabix = auto_tabix
         self._tabix_init()
 
+    #@staticmethod
+    #def str_to_interval(strg):
+    #   strg
+
     def _tabix_init(self):
         self.tabix_fh = tabix.open(self.in_fh.name)
         self._check_tabix()
@@ -309,7 +313,7 @@ class SerialWalker(Walker):
             return self.tabix_fh.querys(interval)
         except TypeError:
             try:
-                return self.tabix_fh.query(*interval)
+                return self.tabix_fh.query(*interval)#is this 1 or zero-indexed? is the first entry included???
             except TypeError, e:
                 logging.error("Interval: {}: Chromosome must be string and position integer."
                                                " e.g. ('Chr1',1000000,1005000). "
@@ -330,6 +334,7 @@ class SerialWalker(Walker):
         if self.parser.parse_fun is not None:
             for interval in self.intervals:
                 fh = self._query_tabix(interval)
+                self.parser.chunk = interval
                 self.parse(fh)
         else:
             logging.warning("No vcf body parse function supplied.")
@@ -341,78 +346,6 @@ class SerialWalker(Walker):
         logging.info("Run finished.")
 
 
-#class MultiRegionParallelWalker(SerialWalker):
-#    def __init__(self, in_fh, parser, intervals,
-#                            ncpus='auto', tmp_dir='.',**kwa):
-#        super(MultiRegionParallelWalker, self).__init__(in_fh,parser,intervals,**kwa)
-#        assert hasattr(self.parser,'reduce_fun'), ("Parser {} has no reduce_fun method. "
-#                                                 "No support for parallel execution.")
-#        if self.parser.reduce_fun is None:
-#            logging.warning("Reduce function is None. Is this really intended?")
-#        self.kwa = kwa
-#        if ncpus == 'auto':
-#            ncpus = mp.cpu_count()
-#        self.ncpus = ncpus
-#        self.tmp_dir = os.path.expanduser(tmp_dir)
-#
-#    def set_ncpus(self):
-#        self.ncpus = min(len(self.intervals),self.ncpus)
-#        logging.info("{} regions specified.  Parallelising by region. "
-#                     "Using {} processes.".format(len(self.intervals),self.ncpus))
-#
-#    def setup_subwalkers(self):
-#        subwalkers = []
-#        temp_fns = []
-#        for i,interval in enumerate(self.intervals):
-#            subparser = copy.deepcopy(self.parser)
-#            subparser.header_fun = None #don't parse header in subparser
-#            parse_source = inspect.getsource(subparser.parse_fun)
-#            for a in subparser.line_write_attrs:
-#                tmp_fn = jn(self.tmp_dir,a+'_'+str(uuid.uuid4()) + \
-#                                         "_" + str(i) + ".tmp")
-#                temp_fns.append(tmp_fn)
-#                setattr(subparser,a+'_fn',tmp_fn)
-#            subwalkers.append(SerialWalker(self.in_fh, subparser, [interval],
-#                                         id="Interval {}:".format(interval), **self.kwa))
-#        self.subwalkers = subwalkers
-#        self.temp_fns = temp_fns
-#
-#    def reduce(self):
-#        if self.parser.reduce_fun is not None:
-#            logging.info("Starting reduce step.")
-#            print [p.out_tsv for p in self.subparsers]
-#            self.parser.reduce_fun([p for p in self.subparsers])
-#        else:
-#            logging.warning("No reduce function given. Won't do anything.")
-#
-#    def del_temp_files(self):
-#        logging.info("Removing temp files.")
-#        while self.temp_fns:
-#            os.remove(self.temp_fns.pop())
-#
-#    def run_parser(self,i):
-#        s = self.subwalkers[i]
-#        for a in s.parser.line_write_attrs:
-#            setattr(s.parser,a,open(getattr(s.parser,a+'_fn'),'w'))
-#        s.run_no_output()
-#        return s.parser
-#
-#    def run(self):
-#        self.parse_header()
-#        self.set_ncpus()
-#        self.setup_subwalkers()
-#        subparsers = parmap(self.run_parser,range(len(self.subwalkers)),self.ncpus)
-#        #this is a hacky solution acconting for the fact that open files cannot be
-#        #pickled and sent to the child processes by multiprocessing
-#        for p in subparsers:
-#            for a in p.line_write_attrs:
-#                setattr(p,a,open(getattr(p,a+'_fn'),'a'))
-#        self.subparsers = subparsers
-#        self.reduce()
-#        logging.info("Creating output.")
-#        self.output()
-#        self.del_temp_files()
-#        logging.info("Run finished.")
 
 
 class ParallelWalker(SerialWalker):
@@ -473,7 +406,7 @@ class ParallelWalker(SerialWalker):
             chrom = chrompos[0]
             try:
                 startend = chrompos[1].split('-')
-                start = int(startend[0])
+                start = int(startend[0]) - 1 #numeric intervals in pytabix start at start+1
                 try:
                     end = int(startend[1])
                 except:
@@ -507,7 +440,7 @@ class ParallelWalker(SerialWalker):
             if interval[2] is None:
                 interval[2] = self.contic_dic[interval[0]]
             if interval[1] is None:
-                interval[1] = 1
+                interval[1] = 0
 
     def get_chunks(self):
         chunks = self.intervals
@@ -517,7 +450,7 @@ class ParallelWalker(SerialWalker):
             longest = chunks[idx]
             midpoint = longest[1]+(longest[2]-longest[1])/2
             left_chunk = [longest[0],longest[1],midpoint]
-            right_chunk = [longest[0],midpoint+1,longest[2]]
+            right_chunk = [longest[0],midpoint,longest[2]]
             chunks[idx] = left_chunk
             chunks.insert(idx+1,right_chunk)
         #chunks.sort()
@@ -530,6 +463,7 @@ class ParallelWalker(SerialWalker):
         for i, chunk in enumerate(self.chunks):
             subparser = copy.deepcopy(self.parser)
             subparser.header_fun = None #don't parse header in subparser
+            subparser.chunk = chunk #make chunk information acessible in subparser
             parse_source = inspect.getsource(subparser.parse_fun)
             for a in subparser.line_write_attrs:
                 tmp_fn = jn(self.tmp_dir,a+'_'+str(uuid.uuid4()) + \
@@ -628,7 +562,17 @@ def parmap(f, X, nprocs):
 #---------support functions used by several parsers------------
 
 def get_header_line_dic(line):
-    dic = {k:v for k,v in [t.split('=') for t  in line.strip().split('=<')[1][:-1].split(',')]}
+    import re
+    try:
+        #split all commas except if in quotes
+        r = re.compile('[^,]+".+"[^,]*'
+                '|'
+                '[^,]+')
+        tags = r.findall(line.strip().split('=<')[1][:-1])
+        dic = {k:v for k,v in [t.split('=') for t  in tags]}
+    except ValueError:
+        print line.strip().split('=<')[1][:-1].split(',')
+        print  [t.split('=') for t  in line.strip().split('=<')[1][:-1].split(',')]
     return dic
 
 
@@ -900,7 +844,7 @@ class LineWriteParser(Parser):
         }
     def reduce_fun(self,selfs):
         try:
-            line_write_reduce_cat([s.out_tsv.name for s in selfs], self.out_tsv)
+            line_write_reduce_cat([s.out_file.name for s in selfs], self.out_file)
         except ReduceError:
             logging.warning("Cat reduce step had non-zero exit status: {}."
                             "Trying pytonic reduce.".format(err))
@@ -1296,6 +1240,89 @@ class AddFilterInfo(Parser):
         #p.wait()
         p.communicate()
 
+class FiltersToFasta(LineWriteParser):
+    """
+    Write a fasta where all filtered sites are set to N.
+    """
+    args = {'type':{'default':'ref','choices':['ref','alt','anc'],
+                     'help':"Specify which base to write to the fasta."
+                            "anc required AA tag in INFO column."},
+            'line_length':{'type':int,'default':80,
+                           'help':'Characters per line in output fasta.'},
+            'out_file':
+                {'required':True,
+                'type':argparse.FileType('w'),
+                'help':"File path to write output fasta to."}}
+    def __init__(self,**kwa):
+        self.chrom = None
+        self.pos = None
+        if self.type == 'anc':
+            self.ancestral_tag = False
+
+    def header_fun(self, line):
+        if self.type == 'anc':
+            if line[:len('##INFO')] == '##INFO':
+                d = get_header_line_dic(line)
+                if d['ID']=='AA':
+                    self.ancestral_tag = True
+            if line[:len("#CHROM")] == '#CHROM':
+                assert self.ancestral_tag, ("VCF has no INFO tag 'AA' defined in header, "
+                                            "won't run with type 'anc'. ")
+
+
+    def parse_fun(self, sline):
+        chrom = sline[0]
+        pos = int(sline[1])
+        ref = sline[3]
+        filter = sline[6]
+        pass0 = filter in ['PASS','Pass']
+        #attention, there is no check whether 1 is missing
+        #but this is tricky in parallel mode
+        #logging.info(self.chunk)
+        if self.pos is None:
+            self.pos = self.chunk[1]
+        if self.pos == 0:
+            #print 'writing chrom'
+            self.out_file.write('>' + chrom)
+        while self.pos + 1 < pos:
+            if not self.pos % self.line_length:
+                self.out_file.write('\n')
+            self.out_file.write('N')
+            self.pos += 1
+        if self.pos >= pos:
+            return
+        self.chrom = chrom
+        self.pos = pos
+        if not pass0:
+            allele = 'N'
+        elif self.type == 'anc':
+            try:
+                allele = get_AA(sline[7])
+            except IndexError:
+                allele = 'N'
+        elif self.type == 'ref':
+            if len(ref)>1:
+                print pos
+                ref = ref[0]
+            allele = ref
+        elif self.type == 'alt':
+            allele = alt
+        else:
+            raise NotImplementedError("Mode {} not implemented.".format(self.type))
+
+        if not (self.pos - 1) % self.line_length:
+            self.out_file.write('\n')
+        self.out_file.write(allele)
+        #self.out_file.write(str(pos)[-1])
+
+    def cleanup_fun(self):
+        while self.pos < self.chunk[2]:
+            if not (self.pos - 1) % self.line_length:
+                self.out_file.write('\n')
+            self.out_file.write('N')
+            self.pos += 1
+    def output_fun(self):
+        self.out_file.write('\n')
 
 
 class SNPEFFParser(Parser):

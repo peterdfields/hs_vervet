@@ -6,12 +6,20 @@ TODO:
 -- allow previous windowing of input data for better performance
 -- ask magnus about applications
 
-Important:
+
 In top scores enrichment:
 If data is on a grid: do not keep the values for each grid point,
 but keep the top values and their distance.
 Could this speed up things when shifting?
 
+-- Allow options to automatically run as many permutations as necessary 
+to get something:
+A) significant
+B) significant above multiple testing
+
+
+Make the output column names generic, i.e., independent
+of the input (score, feature, category, n_features, ...)!?
 
 """
 import os, sys
@@ -942,17 +950,18 @@ if __name__ == "__main__":
             #if permute_args.mode == 'TopScores':
             #    enrich.top_peaks.to_csv(args.name+'.top_peaks.tsv',sep='\t')
             #    enrich.peaks_per_gene.to_csv(args.name+'.peaks_per_gene.tsv',sep='\t')
-        start = time.time()
-        enrich.permute(permute_args.n_permut)
-        end = time.time()
-        delta = end - start
-        logging.info("{} permutations took took {} seconds = {} minutes = {} hours.".format(permute_args.n_permut,
-                                                                                            delta,delta/60.,delta/3600.))
+        if permute_args.n_permut>0:
+            start = time.time()
+            enrich.permute(permute_args.n_permut)
+            end = time.time()
+            delta = end - start
+            logging.info("{} permutations took took {} seconds = {} minutes = {} hours.".format(permute_args.n_permut,
+                                                                                                delta,delta/60.,delta/3600.))
 
-        if permute_args.noinfo:
-            enrich.rank_table.to_csv(args.name+'.ranktable.tsv', sep='\t', header=True)
-        else:
-            enrich.get_pvals().to_csv(args.name+'.pvals.tsv', sep='\t', header=True)
+            if permute_args.noinfo:
+                enrich.rank_table.to_csv(args.name+'.ranktable.tsv', sep='\t', header=True)
+            else:
+                enrich.get_pvals().to_csv(args.name+'.pvals.tsv', sep='\t', header=True)
 
     elif args.run_type == 'Reduce':
         if reduce_args.permuts is None:
@@ -970,8 +979,36 @@ if __name__ == "__main__":
 
         p_val_df = rank_to_pval(tot_rank, pval_threshold=reduce_args.pval_threshold,
                             category_to_description=cat_to_desc)
+        p_val_df.index.name = 'category'
+        #make this as a function to also use it in a all-in-one run
 
+        try:
+            logging.info("Trying to load {}".format(args.name+".peaks_per_feature.tsv"))
+            cand_genes = np.unique(pd.read_csv(args.name+".peaks_per_feature.tsv",usecols=[0],sep='\t').values)
+            #CONTINUE HERE.....
+            gene_per_go_s = feature_to_category.set_index(feature_to_category_cols[0]).ix[cand_genes].groupby(feature_to_category_cols[1]).apply(lambda x: list(x.index))
+            gene_per_go_s.name = feature_to_category_cols[0]
+            p_val_df = pd.concat([p_val_df, gene_per_go_s], axis=1)
+            def check_len(el):
+                try:
+                    return(len(el))
+                except TypeError:
+                    return 0
+            #if not (p_val_df[feature_to_category_cols[0]].apply(check_len) == p_val_df["n_"+feature_to_category_cols[0]]).all():
+            #    assert_df = p_val_df[["n_genes","genes"]]
+            #    assert_df["len_genes"] = assert_df["genes"].apply(check_len)
+            #    assert_df = assert_df[["n_genes","len_genes","genes"]]
+            #    printv("Genes per category from",args.peaks_per_gene_fn,
+            #            "inconsistent with n_genes reported in",permut_fhs[0].name,":",
+            #            assert_df[assert_df["n_genes"]!=assert_df["len_genes"]])
+        except NameError, e:
+            logging.warning("Not adding feature names to pvalue file, no peaks_per_feature file found.")
+            #raise e
+            #logging.info(str(e))
 
+        #try:
+        #    p_val_df = p_val_df['n_genes']
+        p_val_df.sort('p_value',inplace=True)
         p_val_df.to_csv(args.name+'.pvals.tsv', sep='\t')
         if reduce_args.remove_input:
             for fh in permut_fhs:
