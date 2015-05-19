@@ -20,6 +20,9 @@ Solution:
 Directly read the tabix-index and use this information.
 
 
+#give tempfiles more meaningful names:
+outiflename+same random id for all + chunk id
+
 
 
 """
@@ -202,7 +205,7 @@ class Walker(object):
             try:
                 getattr(self.parser,a).close()
             except AttributeError:
-                pass
+                logging.warning("Failed to close {}.".format(a))
 
     def output(self):
         if self.parser.output_fun is not None:
@@ -329,6 +332,24 @@ class SerialWalker(Walker):
         """
         return line
 
+
+#def parse(self, fh):
+#    """
+#    This is a hacky solution for the fact that
+#    tabix includes positions outside of the desired interval
+#    if the positions are deletions and the reference allele overlaps
+#    with the desired interval.
+#    """
+#    if self.parser.parse_fun is not None:
+#        logging.info("{}Parsing vcf body of {}.".format(self.id,fh))
+#        line_it = self._yield_split_line(fh)
+#        for d in line_it:
+#            if int(d[1]) >= self.chunk[1] and int(d[1]) < self.chunk[2]:
+#                self.parser.parse_fun(d)
+#        #not perfect implementation, prev_pos is not necessarily updated 
+#        #in children if _skip_duplicate_line is overidden
+#        logging.info("{}Finished: {} lines at {} {}".format(self.id,self.i,self.prev_chrom,self.prev_pos))
+
     def run_no_output(self):
         self.parse_header()
         if self.parser.parse_fun is not None:
@@ -439,8 +460,10 @@ class ParallelWalker(SerialWalker):
         for interval in self.intervals:
             if interval[2] is None:
                 interval[2] = self.contic_dic[interval[0]]
+                logging.debug("Inferred interval end from contig info in header: {}".format(interval[2]))
             if interval[1] is None:
                 interval[1] = 0
+                logging.debug("Assuming interval start to be zero")
 
     def get_chunks(self):
         chunks = self.intervals
@@ -481,11 +504,19 @@ class ParallelWalker(SerialWalker):
             self.parser.reduce_fun([p for p in self.subparsers])
         else:
             logging.warning("No reduce function given. Won't do anything.")
+        for a in self.parser.line_write_attrs:
+            try:
+                getattr(self.parser,a).close()
+            except AttributeError:
+                logging.warning("Failed to close {}.".format(a))
+
+
 
     def del_temp_files(self):
-        logging.info("Removing temp files.")
-        while self.temp_fns:
-            os.remove(self.temp_fns.pop())
+        pass
+        #logging.info("Removing temp files.")
+        #while self.temp_fns:
+        #    os.remove(self.temp_fns.pop())
 
     def run_parser(self,i):
         s = self.subwalkers[i]
@@ -618,7 +649,12 @@ def sum_countdics(countdics):
 
 
 def get_info_dic(line):
-    return {k:v for (k,v) in [t.split('=') for t in line[7].split(';')]}
+    try:
+        d = {k:v for (k,v) in [t.split('=') for t in line[7].split(';')]}
+    except ValueError:
+        d = {}
+        logging.warning("Can not parse info column at {}:{}".format(line[0],line[1]))
+    return d
 
 ##--------------------Parsers-----------------------
 
@@ -766,6 +802,8 @@ class Parser(object):
                                                                     " Will create tabix index.".format(attr,ext1))
                     index = 'vcf' if ext1[1:] == 'gvcf' else ext1[1:]
                 else:
+                    logging.info("{} has ending {}. Not recognised."
+                                     " Will not create tabix index.".format(attr,ext1))
                     index = False
                 setattr(self,attr,TabixWrite(fh,index))
     header_fun = None
@@ -806,10 +844,11 @@ class TabixWrite(object):
             logging.error("Failed to bgzip {}: {}".format(self.fh.name, err))
             raise IOError
         if self.index:
-            logging.info("Creating tabix index for {}: {}".format(self.fh.name, err))
+            logging.info("Creating tabix index for {}".format(self.fh.name))
             tabix = subprocess.Popen(['tabix','-p',self.index,self.fh.name],stderr=subprocess.PIPE)
-            out, err = tabix.communicate() 
-            if self.bgzip.returncode:
+            out, err = tabix.communicate()
+            logging.debug("Tabix out: {}. err: {}".format(out,err))
+            if self.tabix.returncode:
                 logging.warning("Failed to create tabix index for {}: {}".format(self.fh.name, err))
 
 class ReduceError(Exception):
@@ -826,6 +865,7 @@ def line_write_reduce_python(file_handles, out_fh):
     for fh in file_handles:
         for line in fh:
             out_fh.write(line)
+        out_fh.flush()
 
 class LineWriteParser(Parser):
     """
@@ -845,10 +885,20 @@ class LineWriteParser(Parser):
     def reduce_fun(self,selfs):
         try:
             line_write_reduce_cat([s.out_file.name for s in selfs], self.out_file)
-        except ReduceError:
-            logging.warning("Cat reduce step had non-zero exit status: {}."
-                            "Trying pytonic reduce.".format(err))
-            line_write_reduce_python([s.out_tsv for s in selfs], self.out_tsv)
+            logging.info('Reduced with line_write_reduce_cat on ouf_file.')
+        #except AttributeError, e:
+        #    try:
+        #        out_stream = self.out_file.bgzip.stdin
+        #        line_write_reduce_cat([s.out_file.name for s in selfs], out_stream)
+        #        logging.info('Reduced with line_write_reduce_cat on bgzip stream.')
+        #    except ReduceError, e:
+        #        logging.warning("Cat reduce step tp bgzip had non-zero exit status: {}."
+        #                    "Trying pytonic reduce.".format(e))
+        #        line_write_reduce_python([s.out_file for s in selfs], self.out_file)
+        except Exception, e:
+            logging.warning("Cat reduce step failed: {}."
+                            "Trying pytonic reduce.".format(e))
+            line_write_reduce_python([s.out_file for s in selfs], self.out_file)
 
 class VCFTo012(Parser):
     """
@@ -885,7 +935,7 @@ class VCFToAncDer012(LineWriteParser):
                 {'required':True,
                 'type':argparse.FileType('w'),
                 'help':"File path to write output tsv to."}}
-
+    #line write parser uses out_file not out_tsv!!!!!!
     def __init__(self,**kwa):
         self.nts = ['A','C','T','G']
 
@@ -1324,6 +1374,41 @@ class FiltersToFasta(LineWriteParser):
     def output_fun(self):
         self.out_file.write('\n')
 
+class RemoveLowQualNonVariants(LineWriteParser):
+    #args ={
+    #    'out_file':
+    #        {'required':True,
+    #         'type':argparse.FileType('w'),
+    #         'help':"File path to write output to."}
+    #    }
+    def header_fun(self,line):
+        self.out_file.write(line)
+    def parse_fun(self, sline):
+        #generalise!!!!!!
+        try:
+            if sline[4] == '.' and float(sline[5])>10:
+                filters = sline[6].split(';')
+                try:
+                    filters.remove('LowQual')
+                except ValueError:
+                    pass
+                if not filters:
+                    sline[6] = 'PASS'
+                else:
+                    sline[6] = ';'.join(filters)
+        except ValueError:
+            pass
+            #print sline
+        self.out_file.write("\t".join(sline)+'\n')
+
+    #def reduce_fun(self,selfs):
+        #try:
+        #line_write_reduce_cat([s.out_file.name for s in selfs], self.out_file)
+        #except AttributeError:
+            #logging.warning("Cat reduce step had non-zero exit status: {}."
+            #                "Trying pytonic reduce.".format(err))
+    #    line_write_reduce_python([s.out_file for s in selfs], self.out_file)
+
 
 class SNPEFFParser(Parser):
     """
@@ -1487,7 +1572,7 @@ def get_argparser():
                         default='INFO',
                                                 help='Minimun level of logging.')
     argparser.add_argument('--progress_report_interval',
-                        type=int, default=200000,
+                        type=int, default=400000,
                         help='Number of lines after which to report progress. '
                                             'Only output if logging level >= INFO')
     argparser.add_argument("--help",'-h', action='store_true',
