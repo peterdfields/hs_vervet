@@ -10,7 +10,14 @@ TODO:
 In top scores enrichment:
 If data is on a grid: do not keep the values for each grid point,
 but keep the top values and their distance.
-Could this speed up things when shifting?
+Could this speed up things when shifting? But can be problematic
+if real positions very clustered.
+
+Speed up things:
+Instead of searching features for each shift, make a big sparse matrix 
+(or a dictionary) that says for each snp with which features it is associated.
+Uemit suggest to use a bloomfilter! (fast dictionary)
+ 
 
 -- Allow options to automatically run as many permutations as necessary 
 to get something:

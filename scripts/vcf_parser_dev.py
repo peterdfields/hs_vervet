@@ -204,8 +204,8 @@ class Walker(object):
         for a in self.parser.line_write_attrs:
             try:
                 getattr(self.parser,a).close()
-            except AttributeError:
-                logging.warning("Failed to close {}.".format(a))
+            except AttributeError, e:
+                logging.warning("Failed to close {}. {}".format(a,str(e)))
 
     def output(self):
         if self.parser.output_fun is not None:
@@ -333,22 +333,30 @@ class SerialWalker(Walker):
         return line
 
 
-#def parse(self, fh):
-#    """
-#    This is a hacky solution for the fact that
-#    tabix includes positions outside of the desired interval
-#    if the positions are deletions and the reference allele overlaps
-#    with the desired interval.
-#    """
-#    if self.parser.parse_fun is not None:
-#        logging.info("{}Parsing vcf body of {}.".format(self.id,fh))
-#        line_it = self._yield_split_line(fh)
-#        for d in line_it:
-#            if int(d[1]) >= self.chunk[1] and int(d[1]) < self.chunk[2]:
-#                self.parser.parse_fun(d)
-#        #not perfect implementation, prev_pos is not necessarily updated 
-#        #in children if _skip_duplicate_line is overidden
-#        logging.info("{}Finished: {} lines at {} {}".format(self.id,self.i,self.prev_chrom,self.prev_pos))
+    def parse(self, fh):
+        """
+        This is a hacky solution for the fact that
+        tabix includes positions outside of the desired interval
+        if the positions are deletions and the reference allele overlaps
+        with the desired interval.
+        """
+        if self.parser.parse_fun is not None:
+            logging.info("{}Parsing vcf body of {}.".format(self.id,fh))
+            line_it = self._yield_split_line(fh)
+            logging.debug("Chunk:{}".format(self.parser.chunk))
+            for d in line_it:
+                #attention: pytabix behaves different from tabix
+                #in that the starting index is not in the interval!
+                if int(d[1]) > self.parser.chunk[1] and int(d[1]) <= self.parser.chunk[2]:
+                    self.parser.parse_fun(d)
+                else:
+                    logging.debug("{}:Skipping {} cause int(d[1]) >= self.parser.chunk[1] = {}"
+                                  "and int(d[1]) < self.parser.chunk[2] = {}".format(
+                                      self.parser.chunk,d[1],
+                            int(d[1]) >= self.parser.chunk[1],int(d[1]) < self.parser.chunk[2]))
+            #not perfect implementation, prev_pos is not necessarily updated 
+            #in children if _skip_duplicate_line is overidden
+            logging.info("{}Finished: {} lines at {} {}".format(self.id,self.i,self.prev_chrom,self.prev_pos))
 
     def run_no_output(self):
         self.parse_header()
@@ -513,10 +521,9 @@ class ParallelWalker(SerialWalker):
 
 
     def del_temp_files(self):
-        pass
-        #logging.info("Removing temp files.")
-        #while self.temp_fns:
-        #    os.remove(self.temp_fns.pop())
+        logging.info("Removing temp files.")
+        while self.temp_fns:
+            os.remove(self.temp_fns.pop())
 
     def run_parser(self,i):
         s = self.subwalkers[i]
@@ -847,8 +854,7 @@ class TabixWrite(object):
             logging.info("Creating tabix index for {}".format(self.fh.name))
             tabix = subprocess.Popen(['tabix','-p',self.index,self.fh.name],stderr=subprocess.PIPE)
             out, err = tabix.communicate()
-            logging.debug("Tabix out: {}. err: {}".format(out,err))
-            if self.tabix.returncode:
+            if self.tabix.returncode or err:
                 logging.warning("Failed to create tabix index for {}: {}".format(self.fh.name, err))
 
 class ReduceError(Exception):
@@ -858,8 +864,8 @@ def line_write_reduce_cat(filenames, out_fh):
     command = ["cat"] + filenames
     p = subprocess.Popen(command, stdout=out_fh)
     out, err = p.communicate()
-    if p.returncode:
-        raise ReduceError("Cat reduce step had non-zero exit status: {}.".format(err))
+    if p.returncode or err:
+        raise ReduceError("Cat reduce step had error and/or non-zero exit status: {}.".format(err))
 
 def line_write_reduce_python(file_handles, out_fh):
     for fh in file_handles:
@@ -886,15 +892,15 @@ class LineWriteParser(Parser):
         try:
             line_write_reduce_cat([s.out_file.name for s in selfs], self.out_file)
             logging.info('Reduced with line_write_reduce_cat on ouf_file.')
-        #except AttributeError, e:
-        #    try:
-        #        out_stream = self.out_file.bgzip.stdin
-        #        line_write_reduce_cat([s.out_file.name for s in selfs], out_stream)
-        #        logging.info('Reduced with line_write_reduce_cat on bgzip stream.')
-        #    except ReduceError, e:
-        #        logging.warning("Cat reduce step tp bgzip had non-zero exit status: {}."
-        #                    "Trying pytonic reduce.".format(e))
-        #        line_write_reduce_python([s.out_file for s in selfs], self.out_file)
+        except AttributeError, e:
+            try:
+                out_stream = self.out_file.bgzip.stdin
+                line_write_reduce_cat([s.out_file.name for s in selfs], out_stream)
+                logging.info('Reduced with line_write_reduce_cat on bgzip stream.')
+            except ReduceError, e:
+                logging.warning("Cat reduce step tp bgzip had non-zero exit status: {}."
+                            "Trying pytonic reduce.".format(e))
+                line_write_reduce_python([s.out_file for s in selfs], self.out_file)
         except Exception, e:
             logging.warning("Cat reduce step failed: {}."
                             "Trying pytonic reduce.".format(e))
