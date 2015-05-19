@@ -141,6 +141,51 @@ def data_per_feature(rod,feature_df, feature_name='feature', max_dist=0):
     return dpf
 
 
+def get_features_per_data(peak_s, feature_df, feature_name='feature', max_dist=0):
+    """
+    take the input data series and gets a similar series
+    with one entry per pair data-point gene
+    (i.e., there can be 0,1 or more entries per data point)
+    
+    """
+    all_features = []
+    if not feature_df.index.is_monotonic:
+        feature_df = feature_df.sort_index()
+    tot_hit_df = pd.DataFrame()
+    for chrom in peak_s.index.droplevel(1).unique():
+        loc_feature_df = feature_df.ix[chrom]
+        #loc_feature_df = loc_feature_df.append(pd.DataFrame(np.nan,index=[np.inf],columns=loc_feature_df.columns))
+        #print loc_feature_df.index-max_dist, peak_s.ix[chrom].index.values
+        #try:
+        pos_rel_to_start = np.searchsorted(loc_feature_df.index.values-max_dist,peak_s.ix[chrom].index.values)
+        #except:
+        #    print chrom, peak_s.ix[chrom]
+        pos_rel_to_end = np.searchsorted(loc_feature_df["end"].values+max_dist,peak_s.ix[chrom].index.values)
+        features_per_datapoint = (pos_rel_to_start - pos_rel_to_end)
+        data_idx = [i for i in range(len(features_per_datapoint)) for j in range(features_per_datapoint[i])]
+        features = loc_feature_df[feature_name].iloc[np.hstack([range(a,b) for a,b in zip(pos_rel_to_end,pos_rel_to_start)])].values
+        data_df = pd.DataFrame(peak_s.ix[chrom].iloc[data_idx])
+        data_df[feature_name] = features
+        data_df['chrom'] = chrom
+        all_features.append(data_df)
+    fpd=pd.concat(all_features)    
+    #fpd.set_index(['chrom'],append=True,inplace=True)
+    #fpd = dpf.reorder_levels(['chrom','pos'])
+    g = fpd.reset_index().groupby(['chrom','pos'])
+    def get_series_of_features(gdf):
+        features = gdf[feature_name].unique()
+        r = pd.Series({i:s for i,s in enumerate(features)})
+        df = pd.DataFrame({feature_name:r,peak_s.name:gdf[peak_s.name].values[0]})
+        return df
+    d = g.apply(get_series_of_features)
+    d.index.names = ['chrom','pos','number']
+    return  d
+
+def features_per_data_to_data_per_features(fpd, feature_name='features'):
+    return fpd.reset_index().set_index(feature_name).sort_index()
+
+
+
 def get_features(peak_s, feature_df, feature_name='feature', max_dist=0):
     """
     take the input series and gets.
