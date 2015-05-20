@@ -318,7 +318,7 @@ class SummaryEnrichment(CandidateEnrichment):
         self.category_summary_fun = category_summary_fun
 
         #new
-        self.features_per_data = get_features_per_data(self.value_s, self.feature_df, 
+        self.features_per_data = hp.get_features_per_data(self.value_s, self.feature_df, 
                                                        feature_name=self.feature_name, max_dist=max_dist)
         self.features_per_data.index = self.features_per_data.index.droplevel(2)
 

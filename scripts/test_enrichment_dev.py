@@ -316,6 +316,7 @@ class SummaryEnrichment(CandidateEnrichment):
         self.category_summary = category_summary
         self.feature_summary_fun = feature_summary_fun
         self.category_summary_fun = category_summary_fun
+        self.max_dist = max_dist
 
         self.init_rank_table = self.initital_rank_table()
         self.rank_table = self.init_rank_table
@@ -365,8 +366,8 @@ class SummaryEnrichment(CandidateEnrichment):
             values_per_feature = hp.data_per_feature_FI(value_s, self.feature_df,
                                                     feature_name=self.feature_name)
         else:
-            values_per_feature = hp.data_per_feature(value_s, self.feature_df,
-                                                    feature_name=self.feature_name)
+            values_per_feature = hp.get_features_per_data(value_s, self.feature_df,
+                                                    feature_name=self.feature_name, max_dist=self.max_dist)
         if self.feature_summary is not None:
             groups = values_per_feature.groupby(self.feature_name)
             return getattr(groups, self.feature_summary)()
