@@ -383,7 +383,7 @@ class MultiRegionParallelParser(SerialParser):
         self.reduce()
         logging.info("Creating output.")
         self.output()
-        self.del_temp_files()
+        #self.del_temp_files()
         logging.info("Run finished.")
 
 

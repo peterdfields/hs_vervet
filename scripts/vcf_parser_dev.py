@@ -516,8 +516,7 @@ class ParallelWalker(SerialWalker):
             subparser.chunk = chunk #make chunk information acessible in subparser
             parse_source = inspect.getsource(subparser.parse_fun)
             for a in subparser.line_write_attrs:
-                tmp_fn = jn(self.tmp_dir,a+'_'+str(uuid.uuid4()) + \
-                                         "_" + str(i) + ".tmp")
+                tmp_fn = jn(self.tmp_dir,a+'_'+ '_'.join([str(c) for c in chunk]) +'_'+str(uuid.uuid4()) + ".tmp")
                 temp_fns.append(tmp_fn)
                 setattr(subparser,a+'_fn',tmp_fn)
             subwalkers.append(SerialWalker(self.in_fh, subparser, [chunk],
@@ -542,9 +541,10 @@ class ParallelWalker(SerialWalker):
 
 
     def del_temp_files(self):
-        logging.info("Removing temp files.")
-        while self.temp_fns:
-            os.remove(self.temp_fns.pop())
+        #logging.info("Removing temp files.")
+        #while self.temp_fns:
+        #    os.remove(self.temp_fns.pop())
+        pass
 
     def run_parser(self, i):
         s = self.subwalkers[i]
