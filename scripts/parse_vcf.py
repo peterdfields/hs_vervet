@@ -39,7 +39,10 @@ def generic_parser(parse_fun,header_fun,vcf_fh, tsv_fh,no_skip_multiple_entries,
     p = None
     for line in vcf_fh:
         if line[0] == "#":
+            #try:
             h = header_fun(line, tsv_fh, h,**kwa)
+            #except Exception:
+                
             continue
         d = line.strip().split("\t")
         chrom = d[0]
@@ -86,7 +89,7 @@ def ref_alt_anc_parse_fun(d, tsv_fh,*args):
 #-----------
 import itertools
 
-def msmc_header(line, tsv_fh,*args):
+def msmc_header(line, tsv_fh,*args,**kw):
     if line[1:6] == "CHROM":
         return line[1:].strip().split()
 
