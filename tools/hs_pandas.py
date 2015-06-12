@@ -162,6 +162,7 @@ def get_features_per_data(peak_s, feature_df, feature_name='feature', max_dist=0
         #    print chrom, peak_s.ix[chrom]
         pos_rel_to_end = np.searchsorted(loc_feature_df["end"].values+max_dist,peak_s.ix[chrom].index.values)
         features_per_datapoint = (pos_rel_to_start - pos_rel_to_end)
+        #why is this so slow print features_per_datapoint.shape
         data_idx = [i for i in range(len(features_per_datapoint)) for j in range(features_per_datapoint[i])]
         features = loc_feature_df[feature_name].iloc[np.hstack([range(a,b) for a,b in zip(pos_rel_to_end,pos_rel_to_start)])].values
         data_df = pd.DataFrame(peak_s.ix[chrom].iloc[data_idx])

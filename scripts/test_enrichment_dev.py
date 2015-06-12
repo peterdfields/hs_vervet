@@ -3,7 +3,8 @@
 TODO:
 -- fix the gene summary mode so that is supports overlapping features
     (necessary to implement max_dist argument)
--- allow previous windowing of input data for better performance
+    DONE?
+-- allow prior windowing of input data for better performance
 -- ask magnus about applications
 
 
@@ -195,7 +196,9 @@ class CandidateEnrichment(object):
 
 
     def initital_rank_table(self):
+        logging.debug("get real assoc")
         real_assoc = self.get_association(self.candidate_features)
+        logging.debug("init rank table")
         rt = init_rank_table(real_assoc)
         return rt
 
@@ -318,6 +321,12 @@ class SummaryEnrichment(CandidateEnrichment):
         self.category_summary_fun = category_summary_fun
         self.max_dist = max_dist
 
+        #logging.debug("I am before.")
+        #import pdb
+        #logging.debug("I am here.")
+        #pdb.set_trace()
+        #logging.debug("I am after.")
+
         self.init_rank_table = self.initital_rank_table()
         self.rank_table = self.init_rank_table
         self.ncpus = ncpus
@@ -366,7 +375,7 @@ class SummaryEnrichment(CandidateEnrichment):
             values_per_feature = hp.data_per_feature_FI(value_s, self.feature_df,
                                                     feature_name=self.feature_name)
         else:
-            values_per_feature = hp.get_features_per_data(value_s, self.feature_df,
+            values_per_feature = hp.data_per_feature(value_s, self.feature_df,
                                                     feature_name=self.feature_name, max_dist=self.max_dist)
         if self.feature_summary is not None:
             groups = values_per_feature.groupby(self.feature_name)
@@ -415,9 +424,12 @@ class SummaryEnrichment(CandidateEnrichment):
 
     def create_info(self):
         summary_per_feature = self.get_summary_per_feature(self.value_s)
+        #this is contained in the pvalue df
+        #summary_per_category = self.get_summary_per_category(summary_per_feature)
         summary_per_feature['zscore'] = (summary_per_feature[self.value_name]-summary_per_feature[self.value_name].mean())\
                                             /summary_per_feature[self.value_name].std(ddof=0)
         summary_per_feature.sort('zscore', ascending=False, inplace=True)
+        #self.summary_per_category = summary_per_category
         self.summary_per_feature = summary_per_feature
 
 
@@ -685,6 +697,10 @@ def save_info(enrich, name):
     enrich.create_info()
     enrich.summary_per_feature.to_csv(name + ".summary_per_feature.tsv", sep='\t')
     try:
+        enrich.summary_per_category.to_csv(name + ".summary_per_category.tsv", sep='\t')
+    except AttributeError:
+        pass
+    try:
         enrich.peaks_per_feature.to_csv(name + ".peaks_per_feature.tsv", sep='\t')
         enrich.top_peaks.to_csv(name + ".top_peaks.tsv", sep='\t')
     except AttributeError:
@@ -752,10 +768,10 @@ if __name__ == "__main__":
                                                         "Expects 2 integers or strings.")
     reduceparser.add_argument('--remove_input', action='store_true',
                                 help="Delete the input files given by --permuts .")
-    reduceparser.add_argument('--pval_threshold', type=float, default=1,
-                                 help='Do not report categories with p_value>pval_threshold. '
-                                      '(Of course, they are still used to calculate the Benjamini-Hochberg '
-                                      ' multiple testing correction.)')
+    #reduceparser.add_argument('--pval_threshold', type=float, default=1,
+    #                             help='Do not report categories with p_value>pval_threshold. '
+    #                                  '(Of course, they are still used to calculate the Benjamini-Hochberg '
+    #                                  ' multiple testing correction.)')
 
     #Mode parsers
     void_parser1 = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -985,13 +1001,13 @@ if __name__ == "__main__":
         else:
             cat_to_desc = None
 
-        p_val_df = rank_to_pval(tot_rank, pval_threshold=reduce_args.pval_threshold,
+        p_val_df = rank_to_pval(tot_rank, pval_threshold=1,
                             category_to_description=cat_to_desc)
         p_val_df.index.name = 'category'
         #make this as a function to also use it in a all-in-one run
 
         try:
-            logging.info("Trying to load {}".format(args.name+".peaks_per_feature.tsv"))
+            logging.info("Loading {}".format(args.name+".peaks_per_feature.tsv"))
             cand_genes = np.unique(pd.read_csv(args.name+".peaks_per_feature.tsv",usecols=[0],sep='\t').values)
             #CONTINUE HERE.....
             gene_per_go_s = feature_to_category.set_index(feature_to_category_cols[0]).ix[cand_genes].groupby(feature_to_category_cols[1]).apply(lambda x: list(x.index))
@@ -1009,7 +1025,7 @@ if __name__ == "__main__":
             #    printv("Genes per category from",args.peaks_per_gene_fn,
             #            "inconsistent with n_genes reported in",permut_fhs[0].name,":",
             #            assert_df[assert_df["n_genes"]!=assert_df["len_genes"]])
-        except NameError, e:
+        except IOError, e:
             logging.warning("Not adding feature names to pvalue file, no peaks_per_feature file found.")
             #raise e
             #logging.info(str(e))
@@ -1017,7 +1033,7 @@ if __name__ == "__main__":
         #try:
         #    p_val_df = p_val_df['n_genes']
         p_val_df.sort('p_value',inplace=True)
-        p_val_df.to_csv(args.name+'.pvals.tsv', sep='\t')
+        p_val_df.to_csv(args.name+'_{}.pvals.tsv'.format(p_val_df['out_of'].max()), sep='\t')
         if reduce_args.remove_input:
             for fh in permut_fhs:
                 os.remove(fh.name)
