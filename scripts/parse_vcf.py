@@ -93,11 +93,52 @@ def msmc_header(line, tsv_fh,*args,**kw):
     if line[1:6] == "CHROM":
         return line[1:].strip().split()
 
-def get_alleles(allele_dic,gt_str):
-    allele0 = allele_dic[gt_str[0]]
-    allele1 = allele_dic[gt_str[2]]
-    phased = (True if gt_str[1]=="|" else False)
-    return (allele0, allele1, phased)
+#def get_alleles(allele_dic,gt_str):
+#    allele0 = allele_dic[gt_str[0]]
+#    allele1 = allele_dic[gt_str[2]]
+#    phased = (True if gt_str[1]=="|" else False)
+#    return (allele0, allele1, phased)
+
+
+def get_alleles(gt_str,ref,alts):
+    """
+    alts is a list obtained by alt.split(',')
+    """
+    def get_allele(num_gt):
+        if num_gt == '0':
+            return ref
+        elif num_gt == '.':
+            return '?'
+        else:
+            try:
+                allele = alts[int(num_gt)-1]
+            except IndexError, e:
+                print ref, alts, gt_str
+                raise e
+            return allele
+    gts = gt_str.split(':')[0]
+    if '|' in gts:
+        phased = True
+        gts_ls = gts.split('|')
+    elif '/' in gts:
+        phased = False
+        gts_ls = gts.split('/')
+    else:
+        raise TypeError('Unsupported genotype {}'.format(gt_str))
+
+    #phased = (True if gt_str[1]=="|" else False)
+    try:
+        a0 = get_allele(gts_ls[0])
+    except ValueError,e:
+        print("Problem with gts_ls[0]",gts_ls[0])
+        raise e
+    try:
+        a1 = get_allele(gts_ls[1])
+    except ValueError, e:
+        print("Problem with gts_ls[1]",gts_ls[1])
+        raise e
+    return(a0, a1, phased)
+
 
 def msmc_input_parse_fun(d, tsv_fhs, p, h, ind_tuples,haplotypes):
     """
@@ -105,6 +146,106 @@ def msmc_input_parse_fun(d, tsv_fhs, p, h, ind_tuples,haplotypes):
      segregating and non-segregating, filtered and non-filtered
     *attention, tsv_fh can be a list of multiple file handles
     here, one per output file to be written
+
+    d ... split vcf line
+    tsv_fhs ... list of output filehandles
+    p ... return value of parse fun, counts the number of informative sites for each 
+        comparison
+    h ... header line
+    ind_tuples ...  list of tuples of individual ids, same length as tsv_fhs
+    haplotypes ... which haplotypes to take
+    """
+    alts = d[4].split(',')
+
+
+    #allele_dic = {"0":d[3],"1":alt[0],".":"?",'2':alt[1],'3':alt[]}
+
+    try:
+        len(tsv_fhs)
+    except TypeError:
+        tsv_fhs = [tsv_fhs]
+    assert len(ind_tuples) == len(tsv_fhs)
+    if p is None:
+        p = [0]*len(ind_tuples)
+    #check for filter
+    #if d[6] or len(d[3])>1 or len(d[4])>1:
+    #    print "filtered", d[6]
+    #    return p
+    #else:
+    #    p += 1
+
+    #if pass and not indel or multiallelic
+    if d[6] in ["PASS","",".","LowQual"]:
+        for j,(tsv_fh,ids) in enumerate(zip(tsv_fhs,ind_tuples)):
+            try:
+                genotypes = [get_alleles(d[h.index(id)],d[3],alts) for id in ids]
+            except ValueError, e:
+                print(d)
+                raise(e)
+            phases = [g[2] for g in genotypes]
+            if haplotypes==0:
+                genotype_strs = [g[0] for g in genotypes]
+            elif haplotypes==1:
+                genotype_strs = [g[1] for g in genotypes]
+            elif haplotypes==2:
+                genotype_strs = [g[0]+g[1] for g in genotypes]
+            gts = []
+            for gt, phase in zip(genotype_strs,phases):
+               if phase or ('?' in gt) or (gt == gt[0]*len(gt)):
+                    gts.append([gt])
+               else:
+                    gts.append([gt,gt[::-1]])
+
+            gt_len = 2 if haplotypes==2 else 1
+            skip = False
+            for gt in gts:
+                #skip if missing data or if more than biallelic
+                #for some reason, gt is a list (with one (?) string element)
+                for g in gt:
+                    if len(g) > gt_len or \
+                                   '?' in g:
+                        skip = True
+                        break
+                   # else:
+                    #    print('noskip:',gt)
+            if not skip:
+                try:
+                    gt_str = ",".join(["".join(i) for i in itertools.product(*gts)])
+                except TypeError, e:
+                    print(d[1],d[3],d[4], genotypes, gts)
+                    raise e
+                    
+                #if ids == ['14319', '18694', '15560', '18696']:
+                #    print(d[1],ids,gts,gt_str)
+                #if "?" in gt_str: #don't print site with missing gt
+                #    pass
+                #elif gt_str == len(gt_str) * gt_str[0]: #don't print if all alleles equal
+                p[j] += 1 #count site as informative
+                if gt_str != len(gt_str) * gt_str[0]: #print if not all alleles equal
+                    #print(d[1],genotypes,gts,gt_str)
+                    tsv_fh.write(d[0]+"\t"+d[1]+"\t"+str(p[j])+"\t"+gt_str+"\n")
+                    if len(gt_str) > 2:
+                        print(d)
+                        print gt_str
+                        raise Exception('bla')
+                    p[j] = 0
+    return p
+
+
+def msmc_input_parse_fun_old(d, tsv_fhs, p, h, ind_tuples,haplotypes):
+    """
+    *attention, input must be a VCF that includes all sites,
+     segregating and non-segregating, filtered and non-filtered
+    *attention, tsv_fh can be a list of multiple file handles
+    here, one per output file to be written
+
+    d ... split vcf line
+    tsv_fhs ... list of output filehandles
+    p ... return value of parse fun, counts the number of informative sites for each.
+        comparison
+    h ... header line
+    ind_tuples ...  list of tuples of individual ids, same length as tsv_fhs
+    haplotypes ... which haplotypes to take
     """
     try:
         len(tsv_fhs)
@@ -147,12 +288,14 @@ def msmc_input_parse_fun(d, tsv_fhs, p, h, ind_tuples,haplotypes):
                     tsv_fh.write(d[0]+"\t"+d[1]+"\t"+str(p[j])+"\t"+gt_str+"\n")
                     p[j] = 0
             return p
-        else: 
+        else:
             return p
     else:
         if d[6] in ["PASS","",".","LowQual"] and len(d[3])==1 and (len(d[4])==1 or d[4]=="None"):
             p = [i+1 for i in p]
         return p
+
+
 
 #--------------
 
