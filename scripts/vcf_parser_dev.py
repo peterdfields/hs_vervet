@@ -198,14 +198,18 @@ class Walker(object):
     def cleanup(self):
         """
         """
+        #logging.debug("Before cleanup.")
         if self.parser.cleanup_fun is not None:
             logging.info("Starting cleanup.")
             self.parser.cleanup_fun()
-        for a in self.parser.line_write_attrs:
-            try:
-                getattr(self.parser,a).close()
-            except AttributeError, e:
-                logging.warning("Failed to close {}. {}".format(a,str(e)))
+        #Not sure why the following was needed,
+        #but it causes error when output_fun tries to write to
+        #the line write file (maybe just flush instead?)
+        #for a in self.parser.line_write_attrs:
+        #    try:
+        #        getattr(self.parser,a).close()
+        #    except AttributeError, e:
+        #        logging.warning("Failed to close {}. {}".format(a,str(e)))
 
     def output(self):
         if self.parser.output_fun is not None:
@@ -393,6 +397,8 @@ class SerialWalker(Walker):
             for interval in self.intervals:
                 fh = self._query_tabix(interval)
                 self.parser.chunk = interval
+                self.parser.chrom = interval[0]
+                self.parser.pos = interval[1]
                 self.parse(fh)
         else:
             logging.warning("No vcf body parse function supplied.")
@@ -513,7 +519,9 @@ class ParallelWalker(SerialWalker):
             subparser = copy.copy(self.parser)
             logging.debug("After copy.")
             subparser.header_fun = None #don't parse header in subparser
-            subparser.chunk = chunk #make chunk information acessible in subparser
+            #DON'T do the following, parser must be agnostic to walker, don't pass info to parser
+            subparser.chrom = chunk[0] #make chunk information acessible in subparser
+            subparser.pos = chunk[1]
             parse_source = inspect.getsource(subparser.parse_fun)
             for a in subparser.line_write_attrs:
                 tmp_fn = jn(self.tmp_dir,a+'_'+ '_'.join([str(c) for c in chunk]) +'_'+str(uuid.uuid4()) + ".tmp")
@@ -1327,7 +1335,7 @@ class AddFilterInfo(Parser):
         #p.wait()
         p.communicate()
 
-class FiltersToFasta(LineWriteParser):
+class FiltersToFasta(LineWriteParser):#(LineWriteParser):
     """
     Write a fasta where all filtered sites are set to N.
     """
@@ -1410,6 +1418,96 @@ class FiltersToFasta(LineWriteParser):
             self.pos += 1
     def output_fun(self):
         self.out_file.write('\n')
+
+
+class FiltersToFasta2(LineWriteParser):#(LineWriteParser):
+    """
+    Write a fasta where all filtered sites are set to N.
+    Required whole genome-vcf.
+    This function is tricky, because:
+        -- sometimes whole genome vcfs start at position 2
+        -- how to retain information on new chromosome
+            start, when chunking hits precisely a chromosome
+            boundary?
+    ATTENTION: PARALLEL mode not supported!
+    """
+    args = {'type':{'default':'ref','choices':['ref','alt','anc'],
+                     'help':"Specify which base to write to the fasta."
+                            "anc required AA tag in INFO column."},
+            'line_length':{'type':int,'default':80,
+                           'help':'Characters per line in output fasta.'},
+            'out_file':
+                {'required':True,
+                'type':argparse.FileType('w'),
+                'help':"File path to write output fasta to."}}
+    parallel = False
+    def __init__(self,**kwa):
+        self.chrom = ''
+        self.pos = 1
+        if self.type == 'anc':
+            self.ancestral_tag = False
+
+    def header_fun(self, line):
+        if self.type == 'anc':
+            if line[:len('##INFO')] == '##INFO':
+                d = get_header_line_dic(line)
+                if d['ID']=='AA':
+                    self.ancestral_tag = True
+            if line[:len("#CHROM")] == '#CHROM':
+                assert self.ancestral_tag, ("VCF has no INFO tag 'AA' defined in header, "
+                                            "won't run with type 'anc'. ")
+
+
+    def parse_fun(self, sline):
+        chrom = sline[0]
+        pos = int(sline[1])
+        ref = sline[3]
+        filter = sline[6]
+        pass0 = filter in ['PASS','Pass']
+        if self.pos == 1 or chrom != self.chrom:
+            #print 'writing chrom'
+            self.out_file.write('>' + chrom)
+            if chrom != self.chrom:
+                self.pos = 1
+        while self.pos < pos:
+            if self.pos % self.line_length == 0:
+                self.out_file.write('\n')
+            self.out_file.write('N')
+            self.pos += 1
+        if self.pos >= pos:
+            raise UserException()
+        self.chrom = chrom
+        self.pos = pos
+        if not pass0:
+            allele = 'N'
+        elif self.type == 'anc':
+            try:
+                allele = get_AA(sline[7])
+            except IndexError:
+                allele = 'N'
+        elif self.type == 'ref':
+            if len(ref)>1:
+                ref = ref[0]
+            allele = ref
+        elif self.type == 'alt':
+            allele = alt
+        else:
+            raise NotImplementedError("Mode {} not implemented.".format(self.type))
+
+        self.out_file.write(allele)
+        if self.pos % self.line_length == 0:
+            self.out_file.write('\n')
+        #self.out_file.write(str(pos)[-1])
+
+    def cleanup_fun(self):
+        while self.pos < self.chunk[2]:
+            if not (self.pos - 1) % self.line_length:
+                self.out_file.write('\n')
+            self.out_file.write('N')
+            self.pos += 1
+    def output_fun(self):
+        self.out_file.write('\n')
+
 
 class RemoveLowQualNonVariants(LineWriteParser):
     #args ={

@@ -610,7 +610,8 @@ class Step(BaseClass):
 
         self.jobs[:] = [job for job in self.jobs if not correctly_finished(job)]
         for job in self.jobs:
-            job.depends[:] = [j for j in job.depends if j in self.jobs]
+            job.afterok[:] = [j for j in job.afterok if j in self.jobs]
+            job.afterany[:] = [j for j in job.afterany if j in self.jobs]
 
 
 #for backwards compatability
