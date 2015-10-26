@@ -381,4 +381,3 @@ def data_per_feature_FI(rod, feature_df, feature_name = 'feature'):
     feature_id = feature_df.iloc[pos_rel_to_end[in_feature]][feature_name].values
     rod = rod[in_feature].copy()
     rod[feature_name] = feature_id
-    return rod
