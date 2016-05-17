@@ -33,6 +33,8 @@ def generic_parser(parse_fun,header_fun,vcf_fh, tsv_fh,no_skip_multiple_entries,
     parse_fun... applied to each split data line of the vcf
     header_fun... applied to each line in the vcf header
     """
+    iwarn = 0
+    max_warn = 50
     prev_chrom = None
     prev_pos = -1
     h = None
@@ -55,8 +57,10 @@ def generic_parser(parse_fun,header_fun,vcf_fh, tsv_fh,no_skip_multiple_entries,
                     warnings.warn("Warning, multiple entries for pos {}:{}.\n"
                               "Keeping all entries.".format(chrom,pos))
                 else:
-                    warnings.warn("Warning, multiple entries for pos {}:{}.\n"
-                              "Skipping all but the first.".format(chrom,pos))
+                    if iwarn < max_warn:
+                        warnings.warn("Warning, multiple entries for pos {}:{}.\n"
+                                  "Skipping all but the first.".format(chrom,pos))
+                        iwarn += 1
                     continue
         p = parse_fun(d,tsv_fh, p, h, *args,**kwa)
         prev_chrom = chrom
@@ -224,10 +228,11 @@ def msmc_input_parse_fun(d, tsv_fhs, p, h, ind_tuples,haplotypes):
                 if gt_str != len(gt_str) * gt_str[0]: #print if not all alleles equal
                     #print(d[1],genotypes,gts,gt_str)
                     tsv_fh.write(d[0]+"\t"+d[1]+"\t"+str(p[j])+"\t"+gt_str+"\n")
-                    if len(gt_str) > 2:
-                        print(d)
-                        print gt_str
-                        raise Exception('bla')
+                    #why is the following check needed?
+                    #if len(gt_str) > 2:
+                    #    print(d)
+                    #    print gt_str
+                    #    raise Exception('bla')
                     p[j] = 0
     return p
 

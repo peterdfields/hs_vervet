@@ -387,6 +387,8 @@ class SerialWalker(Walker):
                                       "and int(d[1]) < self.parser.chunk[2] = {}".format(
                                           self.parser.chunk,d[1],
                                 int(d[1]) >= self.parser.chunk[1],int(d[1]) < self.parser.chunk[2]))
+                else:
+                    self.parser.parse_fun(d)
             #not perfect implementation, prev_pos is not necessarily updated 
             #in children if _skip_duplicate_line is overidden
             logging.info("{}Finished: {} lines at {} {}".format(self.id,self.i,self.prev_chrom,self.prev_pos))
@@ -1261,6 +1263,7 @@ class AccessibleGenomeStats(Parser):
         except KeyError:
              self.N_df[category] = ns
 
+
     def reduce_fun(self, selfs):
         #self.N_df = sum([s.N_df for s in selfs])
         self.N_df = reduce(lambda df0, df1: df0.add(df1, fill_value=0), [s.N_df for s in selfs])
@@ -1272,8 +1275,13 @@ class AccessibleGenomeStats(Parser):
         N_df = self.N_df
         sites_dic = self.sites_dic
         Nxy = pd.DataFrame(self.Nxy,index=self.samples,columns=self.samples)
-        corr = (Nxy-1./sites_dic["total"]*np.outer(N_df["total"],N_df["total"]))/\
-                np.sqrt(np.outer(N_df["total"]*(1-1./sites_dic["total"]*N_df["total"]),N_df["total"]*(1-1./sites_dic["total"]*N_df["total"])))
+        try:
+            corr = (Nxy-1./sites_dic["total"]*np.outer(N_df["total"],N_df["total"]))/\
+                    np.sqrt(np.outer(N_df["total"]*(1-1./sites_dic["total"]*N_df["total"]),N_df["total"]*(1-1./sites_dic["total"]*N_df["total"])))
+        except ZeroDivisionError, e:
+            logging.error("Sites sic: " + str(sites_dic))
+            logging.error("N_df: " + str(N_df))
+            raise e
         #try:
         json.dump(sites_dic,self.out_filter_count)
         N_df.to_csv(self.out_N_count,sep='\t')

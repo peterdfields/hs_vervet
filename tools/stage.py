@@ -111,8 +111,8 @@ def local_prepare_staging(file_ls_or_fnfname,partner,direction,mode,run_type='au
         vprint('command:',mv=1)
         p = subprocess.Popen(command, shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     else:
-        vprint('command submitted to dmn via ssh dmn.mendel.gmi.oeaw.ac.at nohup <command>:',mv=1)
-        p = subprocess.Popen("ssh dmn.mendel.gmi.oeaw.ac.at nohup {0}".format(command), shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        vprint('command submitted to dmn via ssh dmn2.mendel.gmi.oeaw.ac.at nohup <command>:',mv=1)
+        p = subprocess.Popen("ssh dmn2.mendel.gmi.oeaw.ac.at nohup {0}".format(command), shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     out, err = p.communicate()
     rc = p.returncode        
     
