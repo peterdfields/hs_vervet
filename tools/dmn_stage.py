@@ -5,7 +5,7 @@ import numpy as np
 from hs_vervet_basics import v_print
 
 #min total files size in bytes to use qsub for staging
-min_mcp_size = 500000000 
+min_mcp_size = 100**100 #MCP is broken so do not use it! #500000000 
 min_qsub_size = 500000000
 
 def stage(file_ls,source_base,target_base,mode,run_type='auto',ignore_ls=None,job_fn=None,out_fn=None,name=None,afterok=None,afterany=None,startonhold=False,verbose=0,file_to_print_to=None):
